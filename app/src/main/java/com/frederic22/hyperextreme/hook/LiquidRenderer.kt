@@ -130,6 +130,7 @@ internal object LiquidRenderer {
     private var sMask = 0
     private var sMaskOn = 0
     private var sVisc = 0
+    private var sSettle = 0
     private var sTexel = 0
     private var sC2 = 0
     private var sDamp = 0
@@ -168,6 +169,8 @@ internal object LiquidRenderer {
 
     /** 最后一次「用户输入」的时刻；用于无输入后强制收敛（见 [settleFactor]）。 */
     @Volatile private var lastInputAt = 0L
+    @Volatile private var lastTiltAt = 0L
+    @Volatile private var visibleLastTick = false
 
     // 参数 / 选区（属性热更，见 refreshTune）
     private var tune: LiquidTune = LiquidTune.WATER
@@ -501,6 +504,7 @@ internal object LiquidRenderer {
         sMask = GLES20.glGetUniformLocation(simProgram, "uMaskTex")
         sMaskOn = GLES20.glGetUniformLocation(simProgram, "uMaskOn")
         sVisc = GLES20.glGetUniformLocation(simProgram, "uVisc")
+        sSettle = GLES20.glGetUniformLocation(simProgram, "uSettle")
         sTexel = GLES20.glGetUniformLocation(simProgram, "uTexel")
         sC2 = GLES20.glGetUniformLocation(simProgram, "uC2")
         sDamp = GLES20.glGetUniformLocation(simProgram, "uDamp")
@@ -696,10 +700,12 @@ internal object LiquidRenderer {
     private val visibilityTick = object : Runnable {
         override fun run() {
             if (!running) return
-            // 锁屏可见而当前没在出帧 ⇒ 唤醒（解锁回来画面可能是旧的，必须重画一帧）
-            if (SystemClock.elapsedRealtime() >= activeUntil && hasVisibleMount()) {
-                requestFrames(1200)
-            }
+            // ⚠️ 只在「从不可见 → 可见」的那一次唤醒。
+            // 早期写法是「空闲且可见就 requestFrames」，等于每 700ms 续一次帧 ——
+            // 渲染器永远不会空闲，仿真一直在跑，用户看到的就是「水波永远不停」。
+            val visible = hasVisibleMount()
+            if (visible && !visibleLastTick) requestFrames(1200)
+            visibleLastTick = visible
             handler?.postDelayed(this, VISIBILITY_MS)
         }
     }
@@ -788,11 +794,24 @@ internal object LiquidRenderer {
      * 画面会在 1~2s 内变成平静水面；新输入立刻回到 1.0。
      */
     private fun settleFactor(): Float {
-        val idle = SystemClock.elapsedRealtime() - lastInputAt
+        val idle = SystemClock.elapsedRealtime() - maxOf(lastInputAt, lastTiltAt)
         return when {
             idle < 2000L -> 1f
             idle < 5000L -> 1f - (idle - 2000L) / 3000f * 0.45f
             else -> 0.55f
+        }
+    }
+
+    /**
+     * 硬收敛系数：无输入 1.5s 后开始给 **高度场本身** 乘一个衰减，
+     * 4.5s 后固定 0.90/帧（约 7 帧衰减一半）—— 保证画面一定会回到平静水面。
+     */
+    private fun settleGain(): Float {
+        val idle = SystemClock.elapsedRealtime() - maxOf(lastInputAt, lastTiltAt)
+        return when {
+            idle < 1500L -> 1f
+            idle < 4500L -> 1f - (idle - 1500L) / 3000f * 0.10f
+            else -> 0.90f
         }
     }
 
@@ -883,6 +902,7 @@ internal object LiquidRenderer {
         GLES20.glUniform1f(sC2, params.c2)
         GLES20.glUniform1f(sDamp, params.damp * settleFactor())
         GLES20.glUniform1f(sVisc, LiquidGlCore.VISCOSITY)
+        GLES20.glUniform1f(sSettle, settleGain())
         GLES20.glUniform1f(sMaskOn, if (maskOn()) 1f else 0f)
         GLES20.glUniform2f(sTilt, tiltX, tiltY)
         GLES20.glUniform1f(sLevel, params.level)
@@ -1052,12 +1072,13 @@ internal object LiquidRenderer {
                 }
                 val nx = (-gx / 4.9f).coerceIn(-1f, 1f)
                 val ny = (gy / 4.9f).coerceIn(-1f, 1f)
-                val moved = abs(nx - tiltX) > 0.012f || abs(ny - tiltY) > 0.012f
+                val moved = abs(nx - tiltX) > 0.02f || abs(ny - tiltY) > 0.02f
                 tiltX = nx
                 tiltY = ny
                 if (moved) {
-                    // 倾斜也算「用户输入」：否则会被 settle 的 0.55 阻尼压得不跟手
-                    lastInputAt = now
+                    // 倾斜单独算「最近一次姿态变化」：它不该让水波的收敛计时器一直重置，
+                    // 否则手一抖整幅就永远在动（用户反馈的核心问题之一）
+                    lastTiltAt = now
                     requestFrames(600)
                 }
 

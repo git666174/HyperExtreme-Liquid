@@ -49,7 +49,7 @@ internal object LiquidGlCore {
      * 这是 8 位纹理下「画面像雪花」的解药，也是「水波太密」的手感旋钮：
      * 调大 ⇒ 只剩大波浪；调小 ⇒ 细节更多，但量化噪声会回来。0.10~0.18 是可用区间。
      */
-    const val VISCOSITY = 0.14f
+    const val VISCOSITY = 0.30f
 
     /**
      * 一套物理 / 观感参数。水波与果冻的差别**全部在这几个数里**，
@@ -147,6 +147,7 @@ internal object LiquidGlCore {
         uniform float uC2;
         uniform float uDamp;
         uniform float uVisc;
+        uniform float uSettle;
         uniform vec2  uTilt;
         uniform float uLevel;
         uniform float uAspect;
@@ -194,6 +195,11 @@ internal object LiquidGlCore {
             float avg4 = (hl + hr + hu + hd) * 0.25;
             h = mix(h, avg4, uVisc);
 
+            // 无输入时强制收敛：每帧整体乘一个 <1 的系数，保证「一定会停」
+            // （只靠 damp 的话，重力弹簧和量化噪声会一直吊着一点能量）
+            h *= uSettle;
+            v *= uSettle;
+
             float m = maskAt(vUv);
             h *= m;
             v *= m;
@@ -235,16 +241,19 @@ internal object LiquidGlCore {
         }
 
         void main() {
-            float hl = H(vUv - vec2(uTexel.x, 0.0));
-            float hr = H(vUv + vec2(uTexel.x, 0.0));
-            float hu = H(vUv - vec2(0.0, uTexel.y));
-            float hd = H(vUv + vec2(0.0, uTexel.y));
+            // 2 纹素步长：8 位高度场的量化噪声主要在 1 纹素尺度上，
+            // 拉宽差分核等于先做一次平均，颗粒感会小很多
+            vec2 o = uTexel * 2.0;
+            float hl = H(vUv - vec2(o.x, 0.0));
+            float hr = H(vUv + vec2(o.x, 0.0));
+            float hu = H(vUv - vec2(0.0, o.y));
+            float hd = H(vUv + vec2(0.0, o.y));
 
             // 梯度换成「每像素」口径：uv 两轴的像素跨度不同，直接对 uv 求导会让
             // 竖屏上的横向位移比纵向弱一倍多。这里除回像素，再乘 uRefract 得像素位移。
             vec2 gpx = vec2(
-                (hr - hl) / (2.0 * uScreen.x * uTexel.x),
-                (hd - hu) / (2.0 * uScreen.y * uTexel.y)
+                (hr - hl) / (2.0 * uScreen.x * o.x),
+                (hd - hu) / (2.0 * uScreen.y * o.y)
             );
 
             float m = maskAt(vUv);

@@ -48,16 +48,16 @@ data class LiquidTune(
     companion object {
 
         /** 水波默认：高频、中等阻尼。 */
-        val WATER = LiquidTune(refract = 3000f, c2 = 0.14f, damp = 0.983f, sigma = 0.085f, level = 0.25f)
+        val WATER = LiquidTune(refract = 1600f, c2 = 0.14f, damp = 0.983f, sigma = 0.085f, level = 0.25f)
 
         /** 果冻默认：低频、低阻尼、大触点。 */
         val JELLY = LiquidTune(refract = 4800f, c2 = 0.07f, damp = 0.990f, sigma = 0.140f, level = 0.45f)
 
         /** 预设「柔和」：几乎不扰原图。 */
-        val SOFT = LiquidTune(refract = 1800f, c2 = 0.10f, damp = 0.975f, sigma = 0.120f, level = 0.15f)
+        val SOFT = LiquidTune(refract = 1000f, c2 = 0.10f, damp = 0.975f, sigma = 0.120f, level = 0.15f)
 
         /** 预设「强劲」：形变大、荡得久。 */
-        val STRONG = LiquidTune(refract = 5200f, c2 = 0.20f, damp = 0.990f, sigma = 0.060f, level = 0.40f)
+        val STRONG = LiquidTune(refract = 3000f, c2 = 0.20f, damp = 0.990f, sigma = 0.060f, level = 0.40f)
 
         /** 预设索引：0 柔和 / 1 标准 / 2 强劲。 */
         fun preset(mode: Int, index: Int): LiquidTune = when (index) {
