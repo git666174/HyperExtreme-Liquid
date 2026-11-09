@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  光栅壁纸的系统壁纸服务描述（2026-11-04）。
+
+  与 `spatial_wallpaper.xml` 同构：只决定"系统壁纸选择器里怎么显示"，与渲染无关。
+  参数在模块自己的二级页里配，所以没有 `settingsActivity`。
+-->
+<wallpaper xmlns:android="http://schemas.android.com/apk/res/android"
+    android:thumbnail="@mipmap/ic_launcher"
+    android:description="@string/raster_wallpaper_desc" />

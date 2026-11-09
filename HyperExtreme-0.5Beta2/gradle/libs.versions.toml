@@ -1,0 +1,27 @@
+[versions]
+agp = "9.4.1"
+kotlin = "2.4.20"
+compose-multiplatform = "1.12.0"
+androidx-activity = "1.13.0"
+miuix = "0.9.4"
+kyant-backdrop = "2.0.0"
+kyant-shapes = "1.2.0"
+# ONNX Runtime **完整版**（支持 .onnx 与 .ort）：mobile minimal build 缺 ConvInteger /
+# 一堆 custom op，实测跑不动 DA V2 int8，2026-10-22 按用户要求退回完整版。
+onnxruntime-android = "1.31.0"
+
+[libraries]
+androidx-activity-compose = { module = "androidx.activity:activity-compose", version.ref = "androidx-activity" }
+jetbrains-compose-foundation = { module = "org.jetbrains.compose.foundation:foundation", version.ref = "compose-multiplatform" }
+miuix-core = { module = "top.yukonga.miuix.kmp:miuix-core", version.ref = "miuix" }
+miuix-ui = { module = "top.yukonga.miuix.kmp:miuix-ui", version.ref = "miuix" }
+miuix-icons = { module = "top.yukonga.miuix.kmp:miuix-icons", version.ref = "miuix" }
+miuix-blur = { module = "top.yukonga.miuix.kmp:miuix-blur", version.ref = "miuix" }
+kyant-backdrop = { module = "io.github.kyant0:backdrop", version.ref = "kyant-backdrop" }
+kyant-shapes = { module = "io.github.kyant0:shapes", version.ref = "kyant-shapes" }
+onnxruntime-android = { module = "com.microsoft.onnxruntime:onnxruntime-android", version.ref = "onnxruntime-android" }
+
+[plugins]
+android-application = { id = "com.android.application", version.ref = "agp" }
+kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
+compose-compiler = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }

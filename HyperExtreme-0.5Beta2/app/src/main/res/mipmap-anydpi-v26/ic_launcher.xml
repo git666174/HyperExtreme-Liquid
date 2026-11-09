@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  自适应图标。可见区是中心 72dp（画布 108dp），所以：
+    foreground = 内容居中、尺寸等效 76dp（略大于可见区 72dp）—— 保证 launcher 的圆形/方形遮罩边缘也被图盖住
+                 （代价只是方形图被圆形裁掉四个角，那四个角本来就是渐变底，看不出来）；
+    background = 图片四条边内侧的平均色（#EFEBF9），纯兜底：万一可见区还比前景大，
+                 露出来的也是同色系，不会出现突兀的色环。
+  前景底图在 `drawable-nodpi/ic_launcher_foreground_img.png`（728×728 画布，512×512 原图 1:1 居中、
+  零重采样 —— 2026-10-16 起；取 728 是因精确比例 ≈727.6，偶数可让居中偏移为整 108px）。
+  之前两种做法都试过且都不对：① 原图直接当 background → 被放大裁切，图不完整；
+  ② 用 legacy PNG（删掉 anydpi-v26）→ 图完整但 launcher 会加白底并缩小。
+-->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@color/ic_launcher_background" />
+    <foreground android:drawable="@drawable/ic_launcher_foreground_img" />
+</adaptive-icon>

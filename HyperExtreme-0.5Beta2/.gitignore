@@ -1,0 +1,28 @@
+*.iml
+.gradle
+/local.properties
+/.idea
+.DS_Store
+/build
+/captures
+.externalNativeBuild
+.cxx
+app/build
+# 参考仓库（HyperChanger）不参与构建，也不需要纳入版本管理
+third_party/
+# 构建/逆向中间产物、签名密钥、个人素材、验证截图
+out/
+.kotlin/
+keystore/
+keystore.properties
+素材/
+ui-check/
+# 项目交接文档（含密钥口令等本机信息），不入库
+agent.md
+# 本机排查用的 LSPosed 配置库副本，不入库
+mc_sync*.db
+
+# 深度模型（`assets/models/dav2_small_int8.onnx`，26MB）**必须入库**（2026-11-02）：
+# 它是运行必需资源，不进去别人 clone 下来跑不起来。GitHub 单文件上限 100MB，26MB 没问题。
+# 以后换模型注意：每次替换都会在历史里留一份 26MB，仓库会线性膨胀 ——
+# 真要频繁换，改用 Git LFS 或把模型挂到 Release 让用户下载。

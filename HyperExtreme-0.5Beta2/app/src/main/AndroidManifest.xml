@@ -1,0 +1,170 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!--
+      本工程的 minSdk 已经提到 33（与 miuix-blur 声明的下限一致），这行 overrideLibrary
+      现在其实已经没有实际作用，留着只是以防该库以后再把下限往上抬。
+    -->
+    <uses-sdk tools:overrideLibrary="top.yukonga.miuix.kmp.blur" />
+
+    <!-- 无 root 时用它尽力重启 com.miui.aod（只对后台进程有效，普通权限）。 -->
+    <uses-permission android:name="android.permission.KILL_BACKGROUND_PROCESSES" />
+    <!-- 「视差效果覆盖桌面」第二步：把「背景 + 主体」合成图设为系统桌面壁纸（2026-10-21）。
+         SET_WALLPAPER 是 normal 权限，安装即授予，不会弹授权框。 -->
+    <uses-permission android:name="android.permission.SET_WALLPAPER" />
+
+    <queries>
+        <package android:name="com.miui.aod" />
+        <package android:name="com.android.systemui" />
+        <package android:name="org.lsposed.manager" />
+    </queries>
+
+    <!--
+      大堆（2026-11-03）。
+
+      为什么要开：分层流水线的复用池是 **56n**（1022×2268 ⇒ 130MB），加深度池 20n 和解码
+      中间量，峰值 170~180MB。不开 largeHeap 时低内存机型的堆上限只有 **192MB** ⇒ 直接 OOM，
+      表现是「生成时卡几秒然后失败」或「卡死」。开之后上限通常翻倍（192→384 / 256→512）。
+
+      副作用只有一条：主进程**退到后台**时，同一 adj 档位里内存占用大的优先被 lmkd 挑中。
+      评估下来可接受 —— 被杀只是重开 app，深度图和层图全在磁盘上，什么都不丢。
+      ⚠️ `:wallpaper` 进程**不受波及**：它是壁纸服务，adj 约 200，而缓存进程是 700+，
+      lmkd 在轻中内存压力下根本不会碰到这一层。
+
+      配套：每次生成结束都调 `SpatialLayers.dropPool()`（见 `SpatialWallpaperPage.runGenerate`），
+      所以「占大内存」只发生在生成的那几十秒里，不是常驻。
+    -->
+    <application
+        android:name=".App"
+        android:allowBackup="false"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:largeHeap="true"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.MaskSwap">
+
+        <!--
+          启动遮罩（2026-10-29）：**没有 setContentView** 的空 Activity，窗口内容就是
+          主题的 windowBackground（@color/launch_bg，浅色白 / 深色黑）。
+
+          为什么不让 MainActivity 直接当 LAUNCHER：Android 12+ 的系统 SplashScreen 在
+          首帧绘制时就关闭，不等 launcher 的应用打开动画结束 ⇒ 界面会「抢跑」。
+          空 Activity 的窗口会一直存活到 MainActivity 的窗口接替，系统动画期间是连续纯色，
+          到主界面真正绘制第一帧才过渡过去。做法与 HyperCeiler 的 SplashActivity 一致。
+        -->
+        <activity
+            android:name=".SplashActivity"
+            android:exported="true"
+            android:theme="@style/Theme.MaskSwap">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:windowSoftInputMode="adjustResize" />
+
+        <!--
+          二级页（「锁屏遮罩替换」 / 「系统界面」）的宿主。
+
+          **刻意做成独立 Activity**：二级页的转场要的是**系统默认的 Activity 动画**
+          （参考应用 HyperCeiler 的观感）。主题沿用 application 上的 @style/Theme.MaskSwap，
+          而它那条链（→ Theme.Material.Light.NoActionBar → … → 基 Theme）上**没有任何
+          windowAnimationStyle** ⇒ 继承 @android:style/Animation.Activity，也就是系统默认那套。
+          —— 在同一个 Activity 里用 Compose 复刻那套动画试过两次，都对不上，见 ui/MaskDetailActivity 的注释。
+
+          launchMode 用 singleTop：连着点同一张卡片不会叠出两个实例。
+        -->
+        <activity
+            android:name=".ui.MaskDetailActivity"
+            android:exported="false"
+            android:launchMode="singleTop"
+            android:configChanges="mcc|mnc|locale|layoutDirection|fontScale|keyboard|keyboardHidden|navigation|orientation|screenLayout|screenSize|smallestScreenSize|uiMode|density|colorMode" />
+
+        <!--
+          「调整显示区域」独立页（2026-11-04）：吃系统默认转场动画。
+          - exported=false：只由空间壁纸页内部拉起；
+          - 不加 configChanges：全屏沉浸页被旋屏/深色切换重建也无所谓（参数已落盘）；
+          - theme 与二级页同一套（深色下系统栏图标才看得见）。
+        -->
+        <activity
+            android:name=".ui.SpatialCropActivity"
+            android:exported="false"
+            android:theme="@style/Theme.MaskSwap" />
+
+        <!--
+          Serves the replacement images to the hooked process (com.miui.aod runs under a
+          different uid, so a plain file path would not be readable there).
+        -->
+        <provider
+            android:name=".data.MaskProvider"
+            android:authorities="com.frederic22.hyperextreme.provider"
+            android:exported="true"
+            android:grantUriPermissions="true" />
+
+        <!--
+          libxposed 官方 service 通道：类名不能改，LSPosed 按这个名字扫描模块，
+          启用后会把服务 binder 送进来 —— 收到即代表"模块已激活"。
+        -->
+        <provider
+            android:name="io.github.libxposed.service.XposedProvider"
+            android:authorities="com.frederic22.hyperextreme.XposedService"
+            android:exported="true" />
+
+        <!--
+          **系统壁纸服务模式**（2026-10-30，v1.5.82）—— 免 root 的降级方案。
+
+          声明形态与 MIUI 自己的壁纸服务逐字同构（`com.miui.miwallpaper.MiWallpaper`）：
+          系统按 `android.service.wallpaper.WallpaperService` 这个 action 扫描候选，
+          `BIND_WALLPAPER` 是**声明在这里**的（系统绑定时校验自己的权限），app 侧不需要申请。
+
+          `android:process=":wallpaper"` 是刻意的：GL 纹理常驻约 27MB，且主进程跑 ONNX
+          推理时内存峰值很高，同进程会互相拖累。代价是配置走文件（SpatialServiceTarget）。
+
+          ⚠️ **不要加 `defaultToDeviceProtectedStorage`**（MIUI 的壁纸服务有，我们不能学）：
+          那会把本进程的 `filesDir` 指到 `/data/user_de/0/...`（device-protected），
+          而 UI 侧和层图缓存都在 `/data/user/0/...`（credential-protected）——
+          两边看到的目录不同，壁纸进程会永远读不到层图。同理也不声明 `directBootAware`：
+          开机未解锁时读不到 credential storage，交给系统先显示默认壁纸、解锁后再绑定。
+        -->
+        <service
+            android:name=".wallpaper.SpatialWallpaperService"
+            android:permission="android.permission.BIND_WALLPAPER"
+            android:exported="true"
+            android:process=":wallpaper">
+            <intent-filter>
+                <action android:name="android.service.wallpaper.WallpaperService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.service.wallpaper"
+                android:resource="@xml/spatial_wallpaper" />
+        </service>
+
+        <!--
+          **光栅壁纸的系统壁纸服务**（2026-11-04）—— 与上面那条**互斥**，同一形态。
+
+          放在同一个 `:wallpaper` 进程：两者不会同时生效（系统壁纸只能有一个），
+          共用进程省一份 GL 常驻。配置同样走文件（`RasterServiceTarget`）。
+
+          ⚠️ 两条 service 的**包名相同**，所以 `SpatialServiceMode.isRunning` 必须比到
+          component 类名，否则一套在跑时另一套的页面会误判"我的服务正在跑"。
+        -->
+        <service
+            android:name=".wallpaper.RasterWallpaperService"
+            android:permission="android.permission.BIND_WALLPAPER"
+            android:exported="true"
+            android:process=":wallpaper">
+            <intent-filter>
+                <action android:name="android.service.wallpaper.WallpaperService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.service.wallpaper"
+                android:resource="@xml/raster_wallpaper" />
+        </service>
+    </application>
+
+</manifest>

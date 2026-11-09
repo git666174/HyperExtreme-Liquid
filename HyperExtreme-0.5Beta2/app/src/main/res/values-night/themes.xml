@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      深色模式下的同名主题覆盖（2026-10-29）。
+
+      ⚠️ values-night 里的同名 style 是**整体替换**、不与 values 合并，所以这里必须把
+      values/themes.xml 的 item 全部重写一遍，只把两个 windowLight* 改成 false ——
+      深色遮罩上要用浅色状态栏/导航栏图标，否则启动那一瞬间状态栏是黑的看不见。
+    -->
+    <style name="Theme.MaskSwap" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/launch_bg</item>
+        <item name="android:windowSplashScreenBackground">@color/launch_bg</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@android:color/transparent</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar">false</item>
+    </style>
+</resources>

@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  系统壁纸服务的描述（2026-10-30，v1.5.82）。
+
+  MIUI 自己的 `res/xml/mi_wallpaper.xml` 只有一行 `android:thumbnail`，这里照抄最小形态：
+  没有 `settingsActivity`（我们的参数在模块自己的二级页里配），`description` 有就用、
+  没有也不影响系统识别。
+
+  ⚠️ 这个文件只决定"系统壁纸选择器里怎么显示"，与渲染无关。
+-->
+<wallpaper xmlns:android="http://schemas.android.com/apk/res/android"
+    android:thumbnail="@mipmap/ic_launcher"
+    android:description="@string/spatial_wallpaper_desc" />

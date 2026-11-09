@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">HyperExtreme</string>
+    <!-- 系统壁纸选择器里显示在「空间壁纸」下面的说明（2026-10-30）。 -->
+    <string name="spatial_wallpaper_desc">空间壁纸：随手机姿态轻微平移的三维景深壁纸</string>
+    <!-- 系统壁纸选择器里显示在「光栅壁纸」下面的说明（2026-11-04）。 -->
+    <string name="raster_wallpaper_desc">光栅壁纸：左右转动手机，多张图片依次擦除过渡</string>
+</resources>

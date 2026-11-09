@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="ic_launcher_background">#EFEBF9</color>
+    <!--
+      启动遮罩色（2026-10-29）：splash 背景 + windowBackground 共用同一个值，
+      两处必须一致，否则 splash 退场到首帧之间会闪一下原来的@android:color/white。
+      跟随**系统**日夜（values-night 里是纯黑）—— 用户 2026-10-29 定的方案，
+      与 HyperCeiler 等模块的 DayNight 做法一致。App 内强制浅/深时冷启动仍有一帧
+      系统色，这是 starting window 由 WMS 用包资源创建的固有代价，改不了。
+    -->
+    <color name="launch_bg">#FFF7F7F7</color>
+</resources>

@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 深色模式下启动遮罩用纯黑（与界面底色一致，启动不再白闪）。见 values/colors.xml 的说明。 -->
+    <color name="launch_bg">#FF000000</color>
+</resources>

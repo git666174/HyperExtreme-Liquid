@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.MaskSwap" parent="android:Theme.Material.Light.NoActionBar">
+        <!--
+          启动画面（2026-10-29 用户定：纯色遮罩、不要图标、跟随系统日夜）。
+
+          * windowBackground = 遮罩色：splash 退场到 Compose 首帧之间露出的是它，
+            必须与 windowSplashScreenBackground 同色，否则会白闪（原来是写死的 white）。
+          * windowSplashScreenBackground：Android 12+ 系统 splash 的底色（不设则回落到
+            windowBackground —— 这里显式写一遍，语义更清楚）。
+          * windowSplashScreenAnimatedIcon 给一个透明 ColorDrawable：系统默认拿 launcher
+            icon 居中显示（真机冷启动实测确实有那个圆角矩形），置透明就只剩纯色遮罩。
+        -->
+        <item name="android:windowBackground">@color/launch_bg</item>
+        <item name="android:windowSplashScreenBackground">@color/launch_bg</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@android:color/transparent</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowLightNavigationBar">true</item>
+    </style>
+</resources>
