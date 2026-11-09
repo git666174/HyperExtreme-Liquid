@@ -1,0 +1,10 @@
+# 二进制文件禁止任何行尾/文本转换。
+# 签名用的 PKCS12 一旦被 git 当文本处理（CRLF 转换）就会直接损坏，
+# CI 上表现为 "Keystore was tampered with, or password was incorrect"。
+*.p12 binary
+*.pfx binary
+*.jks binary
+*.keystore binary
+*.png binary
+*.jpg binary
+*.webp binary
