@@ -466,6 +466,21 @@ internal fun LiquidWallpaperDetail(state: MaskUiState) {
                         push()
                     },
                 )
+                ParallaxSliderRow(
+                    title = "平滑度",
+                    text = "${(tune.smooth * 100f).toInt()}",
+                    value = tune.smooth * 100f,
+                    range = 0f..100f,
+                    steps = 99,
+                    onValueChange = {
+                        tune = tune.copy(smooth = it / 100f)
+                        pushTick++
+                    },
+                    onFinished = {
+                        prefs.setLiquidTune(mode, tune)
+                        push()
+                    },
+                )
                 Button(
                     onClick = {
                         haptic()
@@ -823,5 +838,53 @@ private fun buildMaskBitmap(strokes: List<List<Offset>>, w: Int, h: Int): Bitmap
             canvas.drawPath(path, paint)
         }
     }
+    // 羽化：硬边会在选区边界留下一圈「贴上去」的接缝。
+    // 两次盒式模糊 ≈ 三角形衰减，半径取宽度的 6%（480 宽时约 56px 过渡带）。
+    featherMask(bmp, (w * 0.06f).toInt().coerceAtLeast(4))
     bmp
 }.getOrNull()
+
+/**
+ * 对遮罩做分离式盒式模糊（跑两遍 ≈ 三角核）。
+ *
+ * 只处理灰度通道：遮罩只有「白 = 有液体」这一维信息。
+ * 这一步让渲染端的 `m` 和仿真端的 `h *= m` 都变成渐变，
+ * 选区边界不再是一条硬线。
+ */
+private fun featherMask(bmp: Bitmap, radius: Int) {
+    if (radius <= 0) return
+    val w = bmp.width
+    val h = bmp.height
+    if (w <= 0 || h <= 0) return
+    val src = IntArray(w * h)
+    bmp.getPixels(src, 0, w, 0, 0, w, h)
+    var a = IntArray(w * h) { src[it] and 0xFF }
+    val tmp = IntArray(w * h)
+    val div = 2 * radius + 1
+    repeat(2) {
+        for (y in 0 until h) {
+            val row = y * w
+            var sum = 0
+            for (k in -radius..radius) sum += a[row + k.coerceIn(0, w - 1)]
+            for (x in 0 until w) {
+                tmp[row + x] = sum / div
+                sum += a[row + (x + radius + 1).coerceIn(0, w - 1)] -
+                    a[row + (x - radius).coerceIn(0, w - 1)]
+            }
+        }
+        for (x in 0 until w) {
+            var sum = 0
+            for (k in -radius..radius) sum += tmp[k.coerceIn(0, h - 1) * w + x]
+            for (y in 0 until h) {
+                a[y * w + x] = sum / div
+                sum += tmp[(y + radius + 1).coerceIn(0, h - 1) * w + x] -
+                    tmp[(y - radius).coerceIn(0, h - 1) * w + x]
+            }
+        }
+    }
+    val out = IntArray(w * h) { i ->
+        val v = a[i].coerceIn(0, 255)
+        0xFF000000.toInt() or (v shl 16) or (v shl 8) or v
+    }
+    bmp.setPixels(out, 0, w, 0, 0, w, h)
+}

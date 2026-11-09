@@ -144,6 +144,7 @@ internal object LiquidRenderer {
     private var dMask = 0
     private var dDispTex = 0
     private var dFx = 0
+    private var dSmooth = 0
     private var dMaskOn = 0
     private var dTexel = 0
     private var dScreen = 0
@@ -520,6 +521,7 @@ internal object LiquidRenderer {
         dMask = GLES20.glGetUniformLocation(drawProgram, "uMaskTex")
         dDispTex = GLES20.glGetUniformLocation(drawProgram, "uDispTex")
         dFx = GLES20.glGetUniformLocation(drawProgram, "uFx")
+        dSmooth = GLES20.glGetUniformLocation(drawProgram, "uSmooth")
         dMaskOn = GLES20.glGetUniformLocation(drawProgram, "uMaskOn")
         dTexel = GLES20.glGetUniformLocation(drawProgram, "uTexel")
         dScreen = GLES20.glGetUniformLocation(drawProgram, "uScreen")
@@ -901,7 +903,8 @@ internal object LiquidRenderer {
         GLES20.glUniform2f(sTexel, 1f / simW, 1f / simH)
         GLES20.glUniform1f(sC2, params.c2)
         GLES20.glUniform1f(sDamp, params.damp * settleFactor())
-        GLES20.glUniform1f(sVisc, LiquidGlCore.VISCOSITY)
+        // 平滑度 → 粘度：0.10（几乎不抹）~ 0.55（只剩大波浪）
+        GLES20.glUniform1f(sVisc, 0.10f + tune.smooth * 0.45f)
         GLES20.glUniform1f(sSettle, settleGain())
         GLES20.glUniform1f(sMaskOn, if (maskOn()) 1f else 0f)
         GLES20.glUniform2f(sTilt, tiltX, tiltY)
@@ -988,6 +991,7 @@ internal object LiquidRenderer {
         GLES20.glUniform2f(dImgScale, imgScale[0], imgScale[1])
         GLES20.glUniform1f(dMaskOn, if (maskOn()) 1f else 0f)
         GLES20.glUniform1f(dFx, quality.toFloat())
+        GLES20.glUniform1f(dSmooth, tune.smooth)
         GLES20.glActiveTexture(GLES20.GL_TEXTURE3)
         GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, dispTex)
         GLES20.glUniform1i(dDispTex, 3)

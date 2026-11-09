@@ -230,6 +230,7 @@ internal object LiquidGlCore {
         uniform float uSpec;
         uniform float uJelly;
         uniform float uFx;
+        uniform float uSmooth;
         uniform vec3  uLight;
 
         float H(vec2 uv) { return texture2D(uSim, uv).r * 2.0 - 1.0; }
@@ -241,9 +242,8 @@ internal object LiquidGlCore {
         }
 
         void main() {
-            // 2 纹素步长：8 位高度场的量化噪声主要在 1 纹素尺度上，
-            // 拉宽差分核等于先做一次平均，颗粒感会小很多
-            vec2 o = uTexel * 2.0;
+            // 差分核宽度随「平滑度」走：2~4 纹素。越宽 = 越低通，杂波越少。
+            vec2 o = uTexel * (2.0 + uSmooth * 2.0);
             float hl = H(vUv - vec2(o.x, 0.0));
             float hr = H(vUv + vec2(o.x, 0.0));
             float hu = H(vUv - vec2(0.0, o.y));

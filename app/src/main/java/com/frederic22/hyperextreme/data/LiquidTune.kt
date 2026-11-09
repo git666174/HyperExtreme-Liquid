@@ -34,6 +34,8 @@ data class LiquidTune(
     val damp: Float,
     val sigma: Float,
     val level: Float,
+    /** 平滑度 0..1：越大越「稠」，高频杂波被压得越狠（粘度 + 梯度采样宽度）。 */
+    val smooth: Float = 0.55f,
 ) {
 
     /** 编码成 SystemUI 能读的属性值；解码在 [decode]。 */
@@ -43,21 +45,22 @@ data class LiquidTune(
         (damp * 1000f).roundToInt(),
         (sigma * 1000f).roundToInt(),
         (level * 100f).roundToInt(),
+        (smooth * 100f).roundToInt(),
     ).joinToString(",")
 
     companion object {
 
         /** 水波默认：高频、中等阻尼。 */
-        val WATER = LiquidTune(refract = 1600f, c2 = 0.14f, damp = 0.983f, sigma = 0.085f, level = 0.25f)
+        val WATER = LiquidTune(refract = 1600f, c2 = 0.14f, damp = 0.983f, sigma = 0.085f, level = 0.25f, smooth = 0.60f)
 
         /** 果冻默认：低频、低阻尼、大触点。 */
-        val JELLY = LiquidTune(refract = 4800f, c2 = 0.07f, damp = 0.990f, sigma = 0.140f, level = 0.45f)
+        val JELLY = LiquidTune(refract = 4800f, c2 = 0.07f, damp = 0.990f, sigma = 0.140f, level = 0.45f, smooth = 0.45f)
 
         /** 预设「柔和」：几乎不扰原图。 */
-        val SOFT = LiquidTune(refract = 1000f, c2 = 0.10f, damp = 0.975f, sigma = 0.120f, level = 0.15f)
+        val SOFT = LiquidTune(refract = 1000f, c2 = 0.10f, damp = 0.975f, sigma = 0.120f, level = 0.15f, smooth = 0.80f)
 
         /** 预设「强劲」：形变大、荡得久。 */
-        val STRONG = LiquidTune(refract = 3000f, c2 = 0.20f, damp = 0.990f, sigma = 0.060f, level = 0.40f)
+        val STRONG = LiquidTune(refract = 3000f, c2 = 0.20f, damp = 0.990f, sigma = 0.060f, level = 0.40f, smooth = 0.30f)
 
         /** 预设索引：0 柔和 / 1 标准 / 2 强劲。 */
         fun preset(mode: Int, index: Int): LiquidTune = when (index) {
@@ -77,6 +80,7 @@ data class LiquidTune(
                 damp = (p[2] / 1000f).coerceIn(0.960f, 0.999f),
                 sigma = (p[3] / 1000f).coerceIn(0.020f, 0.150f),
                 level = (p[4] / 100f).coerceIn(0f, 1f),
+                smooth = if (p.size >= 6) (p[5] / 100f).coerceIn(0f, 1f) else 0.55f,
             )
         }
     }
