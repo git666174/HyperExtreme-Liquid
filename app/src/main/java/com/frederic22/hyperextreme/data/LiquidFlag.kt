@@ -43,6 +43,12 @@ object LiquidFlag {
     /** 物理模式：[MODE_WATER] 水波 / [MODE_JELLY] 果冻。 */
     const val PROP_MODE = "debug.hyperextreme.liquid_mode"
 
+    /** 可调参数（`refract,c2,damp,sigma,level` 定点编码，见 [LiquidTune]）。 */
+    const val PROP_TUNE = "debug.hyperextreme.liquid_tune"
+
+    /** 选区（`on,centerY,radius` 定点编码，见 [LiquidMask]）。 */
+    const val PROP_MASK = "debug.hyperextreme.liquid_mask"
+
     /**
      * 渲染器是否真的在出帧（1 = 已挂上并画过）。
      *
@@ -60,14 +66,23 @@ object LiquidFlag {
     fun normalizeMode(mode: Int): Int = if (mode == MODE_JELLY) MODE_JELLY else MODE_WATER
 
     /** 异步写属性；root 不可用时静默失败（界面状态仍然正确，只是不生效）。 */
-    fun push(active: Boolean, key: String?, scope: Int, mode: Int) {
+    fun push(
+        active: Boolean,
+        key: String?,
+        scope: Int,
+        mode: Int,
+        tune: LiquidTune = LiquidTune.WATER,
+        mask: LiquidMask = LiquidMask.FULL,
+    ) {
         Thread {
             val r = runCatching {
                 RootShell.run(
                     "setprop $PROP_ACTIVE ${if (active) 1 else 0}; " +
                         "setprop $PROP_KEY ${key.orEmpty()}; " +
                         "setprop $PROP_SCOPE ${normalizeScope(scope)}; " +
-                        "setprop $PROP_MODE ${normalizeMode(mode)}",
+                        "setprop $PROP_MODE ${normalizeMode(mode)}; " +
+                        "setprop $PROP_TUNE ${tune.encode()}; " +
+                        "setprop $PROP_MASK ${mask.encode()}",
                 )
             }.getOrNull()
             if (r == null || !r.ok) {
@@ -85,14 +100,23 @@ object LiquidFlag {
      * 与 [SpatialFlag.pushRestart] 同一个用途：四元组没变时 `start()` 会直接返回，
      * 换了素材但 key 不变就什么都不会发生。一条脚本里写完，避免两次 setprop 乱序。
      */
-    fun pushRestart(active: Boolean, key: String?, scope: Int, mode: Int) {
+    fun pushRestart(
+        active: Boolean,
+        key: String?,
+        scope: Int,
+        mode: Int,
+        tune: LiquidTune = LiquidTune.WATER,
+        mask: LiquidMask = LiquidMask.FULL,
+    ) {
         Thread {
             val script = "setprop $PROP_ACTIVE 0; " +
                 "sleep 1.3; " +
                 "setprop $PROP_ACTIVE ${if (active) 1 else 0}; " +
                 "setprop $PROP_KEY ${key.orEmpty()}; " +
                 "setprop $PROP_SCOPE ${normalizeScope(scope)}; " +
-                "setprop $PROP_MODE ${normalizeMode(mode)}"
+                "setprop $PROP_MODE ${normalizeMode(mode)}; " +
+                "setprop $PROP_TUNE ${tune.encode()}; " +
+                "setprop $PROP_MASK ${mask.encode()}"
             val r = runCatching { RootShell.run(script) }.getOrNull()
             if (r == null || !r.ok) {
                 Log.w(

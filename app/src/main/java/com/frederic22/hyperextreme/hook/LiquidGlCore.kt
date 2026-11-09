@@ -60,6 +60,25 @@ internal object LiquidGlCore {
         val jelly: Float,
     )
 
+    /**
+     * 把「模式骨架」和「用户调参」合成一份运行参数。
+     *
+     * 骨架（色散/高光/果冻挤压）跟模式走；五个手感量（折射/波速/阻尼/触点/液面）
+     * 全部来自 [LiquidTune] —— 页面滑块改的就是这五个。
+     */
+    fun params(mode: Int, tune: com.frederic22.hyperextreme.data.LiquidTune): Params {
+        val base = if (mode == com.frederic22.hyperextreme.data.LiquidFlag.MODE_JELLY) JELLY else WATER
+        return Params(
+            c2 = tune.c2,
+            damp = tune.damp,
+            level = tune.level,
+            refract = tune.refract,
+            dispersion = base.dispersion,
+            specular = base.specular,
+            jelly = base.jelly,
+        )
+    }
+
     /** 水波：高频、中等阻尼、边缘起涟漪。 */
     val WATER = Params(
         c2 = 0.18f,
@@ -112,18 +131,27 @@ internal object LiquidGlCore {
         varying vec2 vUv;
 
         uniform sampler2D uPrev;
-        uniform sampler2D uMask;
         uniform vec2  uTexel;
         uniform float uC2;
         uniform float uDamp;
-        uniform float uHasMask;
         uniform vec2  uTilt;
         uniform float uLevel;
         uniform float uAspect;
         uniform vec4  uSplat0;
         uniform vec4  uSplat1;
+        uniform float uMaskOn;
+        uniform vec2  uMaskCenter;
+        uniform float uMaskRadius;
 
         float dec(float x) { return x * 2.0 - 1.0; }
+
+        // 软椭圆选区（见 LiquidMask）：1 = 全图；椭圆外压到 0（没有液体）。
+        // v 轴乘 aspect 才是屏幕上的正圆 —— 与 splat 的修正同一个理由。
+        float maskAt(vec2 uv) {
+            if (uMaskOn < 0.5) return 1.0;
+            vec2 d = (uv - uMaskCenter) * vec2(1.0, uAspect) / max(uMaskRadius, 1e-3);
+            return 1.0 - smoothstep(0.82, 1.0, length(d));
+        }
 
         // xy = uv, z = 振幅（>0 表示往下压）, w = sigma（以「屏幕宽度」为单位的半径）
         float splat(vec4 s) {
@@ -154,11 +182,9 @@ internal object LiquidGlCore {
             h += v;
             h -= splat(uSplat0) + splat(uSplat1);
 
-            if (uHasMask > 0.5) {
-                float m = texture2D(uMask, vUv).r;
-                h *= m;
-                v *= m;
-            }
+            float m = maskAt(vUv);
+            h *= m;
+            v *= m;
 
             h = clamp(h, -1.0, 1.0);
             v = clamp(v, -1.0, 1.0);
@@ -181,11 +207,12 @@ internal object LiquidGlCore {
 
         uniform sampler2D uBase;
         uniform sampler2D uSim;
-        uniform sampler2D uMask;
         uniform vec2  uTexel;
         uniform vec2  uScreen;
         uniform vec2  uImgScale;
-        uniform float uHasMask;
+        uniform float uMaskOn;
+        uniform vec2  uMaskCenter;
+        uniform float uMaskRadius;
         uniform float uRefract;
         uniform float uDisp;
         uniform float uSpec;
@@ -193,6 +220,14 @@ internal object LiquidGlCore {
         uniform vec3  uLight;
 
         float H(vec2 uv) { return texture2D(uSim, uv).r * 2.0 - 1.0; }
+
+        // 与 SIM 里同一套软椭圆选区；这里的 aspect 从 uScreen 现算。
+        float maskAt(vec2 uv) {
+            if (uMaskOn < 0.5) return 1.0;
+            float aspect = uScreen.y / uScreen.x;
+            vec2 d = (uv - uMaskCenter) * vec2(1.0, aspect) / max(uMaskRadius, 1e-3);
+            return 1.0 - smoothstep(0.82, 1.0, length(d));
+        }
 
         void main() {
             float hl = H(vUv - vec2(uTexel.x, 0.0));
@@ -208,8 +243,7 @@ internal object LiquidGlCore {
                 (hd - hu) / (2.0 * uScreen.y * uTexel.y)
             );
 
-            float m = 1.0;
-            if (uHasMask > 0.5) m = texture2D(uMask, vUv).r;
+            float m = maskAt(vUv);
 
             // CENTER_CROP + 安全余量（CPU 算好），再翻 y：Bitmap 第 0 行在顶部。
             vec2 uv = (vUv - 0.5) * uImgScale + 0.5;

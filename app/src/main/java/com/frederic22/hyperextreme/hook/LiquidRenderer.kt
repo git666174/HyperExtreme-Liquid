@@ -19,6 +19,8 @@ import android.os.PowerManager
 import android.os.SystemClock
 import android.view.Surface
 import com.frederic22.hyperextreme.data.LiquidFlag
+import com.frederic22.hyperextreme.data.LiquidMask
+import com.frederic22.hyperextreme.data.LiquidTune
 import com.frederic22.hyperextreme.data.MaskPrefs
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -90,10 +92,6 @@ internal object LiquidRenderer {
     /** 兜底可见性轮询：`KeyguardLockedStateListener` 之外的保险（灭亮屏、异常状态）。 */
     private const val VISIBILITY_MS = 700L
 
-    /** 高斯核：水波用小核（指尖感），果冻用大核（整块压下去）。 */
-    private const val SIGMA_WATER = 0.055f
-    private const val SIGMA_JELLY = 0.11f
-
     /** 触点振幅（h 的归一化量，1.0 = 满量程）。 */
     private const val AMP_DOWN = 0.50f
     private const val AMP_MOVE = 0.22f
@@ -128,11 +126,12 @@ internal object LiquidRenderer {
     private var simPos = 0
     private var drawPos = 0
     private var sPrev = 0
-    private var sMask = 0
+    private var sMaskOn = 0
     private var sTexel = 0
     private var sC2 = 0
     private var sDamp = 0
-    private var sHasMask = 0
+    private var sMaskCenter = 0
+    private var sMaskRadius = 0
     private var sTilt = 0
     private var sLevel = 0
     private var sAspect = 0
@@ -140,11 +139,12 @@ internal object LiquidRenderer {
     private var sSplat1 = 0
     private var dBase = 0
     private var dSim = 0
-    private var dMask = 0
+    private var dMaskOn = 0
     private var dTexel = 0
     private var dScreen = 0
     private var dImgScale = 0
-    private var dHasMask = 0
+    private var dMaskCenter = 0
+    private var dMaskRadius = 0
     private var dRefract = 0
     private var dDisp = 0
     private var dSpec = 0
@@ -154,8 +154,12 @@ internal object LiquidRenderer {
     private var quad: FloatBuffer? = null
 
     private var baseTex = 0
-    private var maskTex = 0
-    private var hasMask = false
+    // 参数 / 选区（属性热更，见 refreshTune）
+    private var tune: LiquidTune = LiquidTune.WATER
+    private var maskCfg: LiquidMask = LiquidMask.FULL
+    private var tuneRaw = ""
+    private var maskRaw = ""
+    private var frameNo = 0
     private val simTex = IntArray(2)
     private val simFbo = IntArray(2)
     private var simCur = 0
@@ -242,7 +246,13 @@ internal object LiquidRenderer {
         runKey = key
         runScope = scope
         runMode = mode
-        params = if (mode == LiquidFlag.MODE_JELLY) LiquidGlCore.JELLY else LiquidGlCore.WATER
+        tune = if (mode == LiquidFlag.MODE_JELLY) LiquidTune.JELLY else LiquidTune.WATER
+        params = LiquidGlCore.params(mode, tune)
+        maskCfg = LiquidMask.FULL
+        tuneRaw = ""
+        maskRaw = ""
+        // 属性里可能已经有页面推来的参数（App 启动补推 / 刚拖过滑块）
+        refreshTune()
 
         val dm = android.content.res.Resources.getSystem().displayMetrics
         screenW = dm.widthPixels
@@ -460,11 +470,12 @@ internal object LiquidRenderer {
 
         simPos = GLES20.glGetAttribLocation(simProgram, "aPos")
         sPrev = GLES20.glGetUniformLocation(simProgram, "uPrev")
-        sMask = GLES20.glGetUniformLocation(simProgram, "uMask")
+        sMaskOn = GLES20.glGetUniformLocation(simProgram, "uMaskOn")
         sTexel = GLES20.glGetUniformLocation(simProgram, "uTexel")
         sC2 = GLES20.glGetUniformLocation(simProgram, "uC2")
         sDamp = GLES20.glGetUniformLocation(simProgram, "uDamp")
-        sHasMask = GLES20.glGetUniformLocation(simProgram, "uHasMask")
+        sMaskCenter = GLES20.glGetUniformLocation(simProgram, "uMaskCenter")
+        sMaskRadius = GLES20.glGetUniformLocation(simProgram, "uMaskRadius")
         sTilt = GLES20.glGetUniformLocation(simProgram, "uTilt")
         sLevel = GLES20.glGetUniformLocation(simProgram, "uLevel")
         sAspect = GLES20.glGetUniformLocation(simProgram, "uAspect")
@@ -474,11 +485,12 @@ internal object LiquidRenderer {
         drawPos = GLES20.glGetAttribLocation(drawProgram, "aPos")
         dBase = GLES20.glGetUniformLocation(drawProgram, "uBase")
         dSim = GLES20.glGetUniformLocation(drawProgram, "uSim")
-        dMask = GLES20.glGetUniformLocation(drawProgram, "uMask")
+        dMaskOn = GLES20.glGetUniformLocation(drawProgram, "uMaskOn")
         dTexel = GLES20.glGetUniformLocation(drawProgram, "uTexel")
         dScreen = GLES20.glGetUniformLocation(drawProgram, "uScreen")
         dImgScale = GLES20.glGetUniformLocation(drawProgram, "uImgScale")
-        dHasMask = GLES20.glGetUniformLocation(drawProgram, "uHasMask")
+        dMaskCenter = GLES20.glGetUniformLocation(drawProgram, "uMaskCenter")
+        dMaskRadius = GLES20.glGetUniformLocation(drawProgram, "uMaskRadius")
         dRefract = GLES20.glGetUniformLocation(drawProgram, "uRefract")
         dDisp = GLES20.glGetUniformLocation(drawProgram, "uDisp")
         dSpec = GLES20.glGetUniformLocation(drawProgram, "uSpec")
@@ -545,14 +557,11 @@ internal object LiquidRenderer {
         if (simTex[0] != 0) GLES20.glDeleteTextures(2, simTex, 0)
         if (simFbo[0] != 0) GLES20.glDeleteFramebuffers(2, simFbo, 0)
         if (baseTex != 0) GLES20.glDeleteTextures(1, intArrayOf(baseTex), 0)
-        if (maskTex != 0) GLES20.glDeleteTextures(1, intArrayOf(maskTex), 0)
         if (simProgram != 0) GLES20.glDeleteProgram(simProgram)
         if (drawProgram != 0) GLES20.glDeleteProgram(drawProgram)
         simTex[0] = 0; simTex[1] = 0
         simFbo[0] = 0; simFbo[1] = 0
         baseTex = 0
-        maskTex = 0
-        hasMask = false
         simProgram = 0
         drawProgram = 0
     }
@@ -689,6 +698,8 @@ internal object LiquidRenderer {
         val d = display ?: return
         val c = eglContext ?: return
         if (mounts.isEmpty()) return
+        frameNo++
+        if (frameNo % 30 == 0) refreshTune()
 
         val targets = if (force) mounts else mounts.filter { visibleNow(it.locked) }
         if (targets.isEmpty()) return
@@ -722,6 +733,28 @@ internal object LiquidRenderer {
         }
     }
 
+    /**
+     * 参数 / 选区**热更新**（页面滑块只改属性，不重启渲染器）。
+     *
+     * 属性通道见 `LiquidFlag.PROP_TUNE / PROP_MASK`；`HookRuntime.systemProperty`
+     * 自带 300ms 缓存，所以这里每 30 帧（~0.5s）读一次，开销可以忽略。
+     */
+    private fun refreshTune() {
+        val rawTune = HookRuntime.systemProperty(LiquidFlag.PROP_TUNE).trim()
+        if (rawTune != tuneRaw) {
+            tuneRaw = rawTune
+            LiquidTune.decode(rawTune)?.let {
+                tune = it
+                params = LiquidGlCore.params(runMode, it)
+            }
+        }
+        val rawMask = HookRuntime.systemProperty(LiquidFlag.PROP_MASK).trim()
+        if (rawMask != maskRaw) {
+            maskRaw = rawMask
+            LiquidMask.decode(rawMask)?.let { maskCfg = it }
+        }
+    }
+
     /** 模拟 pass：读上一帧 → 波动 → 注入 → 写另一张纹理。 */
     private fun stepSim() {
         GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, simFbo[1 - simCur])
@@ -735,21 +768,19 @@ internal object LiquidRenderer {
         GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, simTex[simCur])
         GLES20.glUniform1i(sPrev, 0)
 
-        GLES20.glActiveTexture(GLES20.GL_TEXTURE1)
-        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, if (hasMask) maskTex else 0)
-        GLES20.glUniform1i(sMask, 1)
-
         GLES20.glUniform2f(sTexel, 1f / simW, 1f / simH)
         GLES20.glUniform1f(sC2, params.c2)
         GLES20.glUniform1f(sDamp, params.damp)
-        GLES20.glUniform1f(sHasMask, if (hasMask) 1f else 0f)
+        GLES20.glUniform1f(sMaskOn, if (maskCfg.on) 1f else 0f)
+        GLES20.glUniform2f(sMaskCenter, 0.5f, 1f - maskCfg.centerY)
+        GLES20.glUniform1f(sMaskRadius, maskCfg.radius)
         GLES20.glUniform2f(sTilt, tiltX, tiltY)
         GLES20.glUniform1f(sLevel, params.level)
         GLES20.glUniform1f(sAspect, screenH.toFloat() / screenW)
 
         val a = touches.poll()
         val b = if (a != null) touches.poll() else null
-        val sigma = if (runMode == LiquidFlag.MODE_JELLY) SIGMA_JELLY else SIGMA_WATER
+        val sigma = tune.sigma
         GLES20.glUniform4f(sSplat0, a?.get(0) ?: 0f, a?.get(1) ?: 0f, a?.get(2) ?: 0f, sigma)
         GLES20.glUniform4f(sSplat1, b?.get(0) ?: 0f, b?.get(1) ?: 0f, b?.get(2) ?: 0f, sigma)
 
@@ -774,14 +805,12 @@ internal object LiquidRenderer {
         GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, simTex[simCur])
         GLES20.glUniform1i(dSim, 1)
 
-        GLES20.glActiveTexture(GLES20.GL_TEXTURE2)
-        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, if (hasMask) maskTex else 0)
-        GLES20.glUniform1i(dMask, 2)
-
         GLES20.glUniform2f(dTexel, 1f / simW, 1f / simH)
         GLES20.glUniform2f(dScreen, screenW.toFloat(), screenH.toFloat())
         GLES20.glUniform2f(dImgScale, imgScale[0], imgScale[1])
-        GLES20.glUniform1f(dHasMask, if (hasMask) 1f else 0f)
+        GLES20.glUniform1f(dMaskOn, if (maskCfg.on) 1f else 0f)
+        GLES20.glUniform2f(dMaskCenter, 0.5f, 1f - maskCfg.centerY)
+        GLES20.glUniform1f(dMaskRadius, maskCfg.radius)
         GLES20.glUniform1f(dRefract, params.refract)
         GLES20.glUniform1f(dDisp, params.dispersion)
         GLES20.glUniform1f(dSpec, params.specular)

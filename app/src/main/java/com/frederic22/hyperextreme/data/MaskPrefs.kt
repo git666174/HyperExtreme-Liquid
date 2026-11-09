@@ -312,6 +312,39 @@ class MaskPrefs(context: Context) {
         prefs.edit().putString(KEY_LIQUID_KEY, key.orEmpty()).commit()
     }
 
+    /** 当前模式的参数（每模式一份，见 [LiquidTune] 的类注释）。 */
+    fun liquidTune(mode: Int): LiquidTune {
+        val key = if (mode == com.frederic22.hyperextreme.data.LiquidFlag.MODE_JELLY) {
+            KEY_LIQUID_TUNE_JELLY
+        } else {
+            KEY_LIQUID_TUNE_WATER
+        }
+        return LiquidTune.decode(prefs.getString(key, "").orEmpty())
+            ?: if (mode == com.frederic22.hyperextreme.data.LiquidFlag.MODE_JELLY) {
+                LiquidTune.JELLY
+            } else {
+                LiquidTune.WATER
+            }
+    }
+
+    fun setLiquidTune(mode: Int, tune: LiquidTune) {
+        val key = if (mode == com.frederic22.hyperextreme.data.LiquidFlag.MODE_JELLY) {
+            KEY_LIQUID_TUNE_JELLY
+        } else {
+            KEY_LIQUID_TUNE_WATER
+        }
+        prefs.edit().putString(key, tune.encode()).commit()
+    }
+
+    /** 选区（全局，不随模式变化）。 */
+    val liquidMask: LiquidMask
+        get() = LiquidMask.decode(prefs.getString(KEY_LIQUID_MASK, "").orEmpty())
+            ?: LiquidMask.FULL
+
+    fun setLiquidMask(mask: LiquidMask) {
+        prefs.edit().putString(KEY_LIQUID_MASK, mask.encode()).commit()
+    }
+
     /**
      * 上一次「应用」时记下的 **key 与 crop.json 的 mtime**（2026-11-05）。
      *
@@ -982,6 +1015,9 @@ class MaskPrefs(context: Context) {
         const val KEY_LIQUID_MODE = "liquid_mode"
         const val KEY_LIQUID_SCOPE = "liquid_scope"
         const val KEY_LIQUID_KEY = "liquid_key"
+        const val KEY_LIQUID_TUNE_WATER = "liquid_tune_water"
+        const val KEY_LIQUID_TUNE_JELLY = "liquid_tune_jelly"
+        const val KEY_LIQUID_MASK = "liquid_mask"
 
         /** 「应用」时记下的 crop 指纹（见 `spatialAppliedCropKey`）。 */
         const val KEY_SPATIAL_APPLIED_CROP_KEY = "spatial_applied_crop_key"

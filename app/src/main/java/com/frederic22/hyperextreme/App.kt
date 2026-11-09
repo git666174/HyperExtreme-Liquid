@@ -100,6 +100,8 @@ class App : Application() {
                 prefs.liquidKey.takeIf { it.isNotEmpty() },
                 prefs.liquidScope,
                 prefs.liquidMode,
+                prefs.liquidTune(prefs.liquidMode),
+                prefs.liquidMask,
             )
             // 开关开着但图可能失效（重装/换图）——启动时再推一次给 miwallpaper。
             if (prefs.parallaxCoverDesktop) {
