@@ -88,9 +88,17 @@ internal object SpatialForegroundHider {
             com.frederic22.hyperextreme.data.RasterFlag.PROP_SCOPE,
         ).trim().toIntOrNull() ?: MaskPrefs.SPATIAL_SCOPE_LOCK
         val rasterOn = rasterActive && rasterScope != MaskPrefs.SPATIAL_SCOPE_DESKTOP
-        val v = spatialOn || rasterOn
+        // **液态壁纸同理**（2026-11-09）：它也挂在壁纸 leash 上、全屏不透明，
+        // 不撤这层的话系统的主体抠像会浮在液体上面（与光栅一模一样的症状）。
+        val liquidOn = HookRuntime.systemProperty(
+            com.frederic22.hyperextreme.data.LiquidFlag.PROP_ACTIVE,
+        ).trim() == "1"
+        val v = spatialOn || rasterOn || liquidOn
         if (v != cacheValue) {
-            log("开关 -> $v（空间=$spatialOn[$active/$scope] 光栅=$rasterOn[$rasterActive/$rasterScope]）")
+            log(
+                "开关 -> $v（空间=$spatialOn[$active/$scope] 光栅=$rasterOn[$rasterActive/$rasterScope] " +
+                    "液态=$liquidOn）",
+            )
         }
         cacheAt = now
         cacheValue = v

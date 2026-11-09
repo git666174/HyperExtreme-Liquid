@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.Bundle
 import android.util.Log
 import android.view.View
+import com.frederic22.hyperextreme.data.LiquidFlag
 import com.frederic22.hyperextreme.data.MaskPrefs
 import com.frederic22.hyperextreme.data.MaskProvider
 import com.frederic22.hyperextreme.data.MaskRole
@@ -178,6 +179,9 @@ class HookEntry : XposedModule() {
         // 诊断（2026-10-22）：确认 SystemUI 进程里能否建 EGL / 跑 GL —— 空间壁纸架构的前提。
         // 只读探针，不接入任何逻辑；日志前缀 GPUPROBE。
         runCatching { GpuProbe.run("systemui") }
+        // 液态壁纸的触摸桥（2026-11-09）：挂 `ViewGroup#dispatchTouchEvent`，只抄坐标、
+        // 不消费。宿主（锁屏窗口根）由上面的 `View#onAttachedToWindow` 喂进来。
+        guard("液态触摸") { LiquidTouch.install(this, loader) }
         // GL 渲染探针（2026-10-22 验证完成）：已确认「自建 SurfaceControl + EGL + glClear + swapBuffers
         // + reparent 到壁纸层」全链路可用，屏幕上能看到半透明洋红块。
         // **平时保持关闭**，需要重验时把下面这行改成 true。
@@ -317,6 +321,59 @@ class HookEntry : XposedModule() {
                 }
             }
         }.apply { isDaemon = true }.start()
+        // 「液态壁纸」渲染器开关轮询（2026-11-09）：第四条独立链。
+        // 与三条老链同一套路，只是四元组多了一个 mode —— 四者**只在启动时读一次**，
+        // 任何一项变化都要重建（换模式不是热更，是重启渲染器）。
+        Thread {
+            var lastKey: String? = null
+            var lastScope = Int.MIN_VALUE
+            var lastMode = Int.MIN_VALUE
+            var tick = 0
+            HookRuntime.log("LIQUID 轮询已启动（监听属性 ${LiquidFlag.PROP_ACTIVE}）")
+            while (true) {
+                try {
+                    Thread.sleep(1000)
+                    tick++
+                    val active = HookRuntime.systemProperty(LiquidFlag.PROP_ACTIVE).trim() == "1"
+                    val key = HookRuntime.systemProperty(LiquidFlag.PROP_KEY).trim()
+                    val scope = HookRuntime.systemProperty(LiquidFlag.PROP_SCOPE).trim()
+                        .toIntOrNull()?.let { LiquidFlag.normalizeScope(it) }
+                        ?: MaskPrefs.SPATIAL_SCOPE_LOCK
+                    val mode = HookRuntime.systemProperty(LiquidFlag.PROP_MODE).trim()
+                        .toIntOrNull()?.let { LiquidFlag.normalizeMode(it) }
+                        ?: LiquidFlag.MODE_WATER
+                    if (tick <= 3 || tick % 60 == 0) {
+                        HookRuntime.log(
+                            "LIQUID 轮询 tick=$tick active=$active key=$key scope=$scope mode=$mode " +
+                                "last=$lastKey/$lastScope/$lastMode",
+                        )
+                    }
+                    if (active) {
+                        if (key != lastKey || scope != lastScope || mode != lastMode) {
+                            val ctx = HookRuntime.appContext()
+                            if (ctx != null) {
+                                HookRuntime.log(
+                                    "LIQUID 开关=开 key=$key scope=$scope mode=$mode → 启动渲染器",
+                                )
+                                LiquidRenderer.start(ctx, key, scope, mode)
+                                lastKey = key
+                                lastScope = scope
+                                lastMode = mode
+                            }
+                        }
+                    } else if (lastKey != null) {
+                        HookRuntime.log("LIQUID 开关=关 → 停止渲染器")
+                        LiquidRenderer.stop()
+                        lastKey = null
+                        lastScope = Int.MIN_VALUE
+                        lastMode = Int.MIN_VALUE
+                    }
+                } catch (t: Throwable) {
+                    // 轮询线程不许死
+                    HookRuntime.log("LIQUID 轮询异常：${t.javaClass.simpleName}: ${t.message}")
+                }
+            }
+        }.apply { isDaemon = true }.start()
         // 「视差效果覆盖桌面」第二步：桌面主体层（TYPE_WALLPAPER 窗口）。
         // 拿 Context 的时机不稳定（SystemUI 里 currentApplication 有时还没就绪），
         // 所以后台重试几次；ParallaxBg 每帧也会兜底再试一次。
@@ -347,6 +404,9 @@ class HookEntry : XposedModule() {
                         val view = chain.getThisObject() as? View
                         // 「替换后自动灭亮屏」的接收器：借高频的视图入窗顺手装一次（幂等）。
                         view?.let { runCatching { ScreenFlash.install(it.context) } }
+                        // 液态壁纸的触摸宿主：与按钮同一条「按 id 名认人」的路子。
+                        // `LiquidTouch` 内部第一行是「已找到就返回」，这里可以无条件转发。
+                        view?.let { runCatching { LiquidTouch.onViewAttached(it) } }
                         if (LockScreenButton.ready()) return chain.proceed()
                         val result = chain.proceed()
                         LockScreenButton.attachIfTarget(view)
