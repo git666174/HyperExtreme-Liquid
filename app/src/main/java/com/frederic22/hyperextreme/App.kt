@@ -2,6 +2,7 @@ package com.frederic22.hyperextreme
 
 import android.app.Application
 import android.os.SystemClock
+import com.frederic22.hyperextreme.data.LiquidFlag
 import com.frederic22.hyperextreme.data.MaskPrefs
 import com.frederic22.hyperextreme.data.MaskStore
 import com.frederic22.hyperextreme.data.ParallaxCoverFlag
@@ -92,6 +93,13 @@ class App : Application() {
                 prefs.rasterLockDepth,
                 prefs.rasterMaxAngle,
                 prefs.rasterSettle,
+            )
+            // 「液态壁纸」同理：`debug.*` 属性不持久化，重启后靠这里补回。
+            LiquidFlag.push(
+                prefs.liquidActive,
+                prefs.liquidKey.takeIf { it.isNotEmpty() },
+                prefs.liquidScope,
+                prefs.liquidMode,
             )
             // 开关开着但图可能失效（重装/换图）——启动时再推一次给 miwallpaper。
             if (prefs.parallaxCoverDesktop) {

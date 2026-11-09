@@ -89,6 +89,19 @@ class MaskProvider : ContentProvider() {
             if (!f.isFile) throw FileNotFoundException("文件不存在: $uri")
             return ParcelFileDescriptor.open(f, ParcelFileDescriptor.MODE_READ_ONLY)
         }
+        // 「液态壁纸」素材（2026-11-09）：`content://…/liquid/<16位哈希>/base`。
+        // 渲染器在 SystemUI 进程，读不到模块私有目录，只能走 provider 流式拿（与空间/光栅同套路）。
+        // ⚠️ provider 是导出的，路径必须严格白名单（哈希 16 位 hex + 固定文件名 base）。
+        if (uri.pathSegments.firstOrNull() == LIQUID_SEGMENT) {
+            val key = uri.pathSegments.getOrNull(1).orEmpty()
+            val name = uri.pathSegments.getOrNull(2).orEmpty()
+            if (!key.matches(LIQUID_KEY_RE) || name != "base") {
+                throw FileNotFoundException("非法的液态壁纸路径: $uri")
+            }
+            val f = LiquidStore.baseFile(appContext, key)
+            if (!f.isFile) throw FileNotFoundException("液态壁纸素材不存在: $uri")
+            return ParcelFileDescriptor.open(f, ParcelFileDescriptor.MODE_READ_ONLY)
+        }
         // 「视差壁纸效果」的背景图 —— SystemUI 侧（hook/ParallaxBg）显示时从这儿读流。
         if (uri.pathSegments.lastOrNull() == PARALLAX_SEGMENT) {
             val bg = MaskStore.parallaxFile(appContext)
@@ -562,6 +575,8 @@ class MaskProvider : ContentProvider() {
 
         /** 「光栅壁纸」：`raster/<组id>/meta`、`raster/<组id>/<序号>`、`raster/<组id>/subject/<序号>`。 */
         const val RASTER_SEGMENT = "raster"
+        const val LIQUID_SEGMENT = "liquid"
+        private val LIQUID_KEY_RE = Regex("^[0-9a-f]{16}$")
         private val RASTER_ID_RE = Regex("^[0-9]{6,20}$")
         private val RASTER_INDEX_RE = Regex("^[0-9]$")
 

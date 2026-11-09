@@ -274,6 +274,44 @@ class MaskPrefs(context: Context) {
         }.commit()
     }
 
+    // ───────────────────────── 液态壁纸（2026-11-09）─────────────────────────
+    //
+    // 与空间/光栅**完全独立**：各读各的键、各推各的属性。三者的共同点只有
+    // 「都挂在壁纸 leash 上」，所以同时开时会抢同一层（页面里给了软提示，未做强制互斥）。
+
+    /** 液态壁纸是否生效（SystemUI 侧轮询属性来起停渲染器）。 */
+    val liquidActive: Boolean
+        get() = prefs.getBoolean(KEY_LIQUID_ACTIVE, false)
+
+    /** 物理模式：0 水波 / 1 果冻（[com.frederic22.hyperextreme.data.LiquidFlag] 同值）。 */
+    val liquidMode: Int
+        get() = prefs.getInt(KEY_LIQUID_MODE, 0).let { if (it == 1) 1 else 0 }
+
+    /** 生效范围：0 锁屏 / 1 桌面 / 2 全局（与 [spatialScope] 同值域）。 */
+    val liquidScope: Int
+        get() = prefs.getInt(KEY_LIQUID_SCOPE, SPATIAL_SCOPE_LOCK)
+            .takeIf { it in SPATIAL_SCOPE_CHOICES } ?: SPATIAL_SCOPE_LOCK
+
+    fun setLiquidActive(value: Boolean) {
+        prefs.edit().putBoolean(KEY_LIQUID_ACTIVE, value).commit()
+    }
+
+    fun setLiquidMode(value: Int) {
+        prefs.edit().putInt(KEY_LIQUID_MODE, if (value == 1) 1 else 0).commit()
+    }
+
+    fun setLiquidScope(value: Int) {
+        prefs.edit().putInt(KEY_LIQUID_SCOPE, if (value in SPATIAL_SCOPE_CHOICES) value else SPATIAL_SCOPE_LOCK).commit()
+    }
+
+    /** 当前选中的素材 key（空串 = 用系统壁纸）。由 `LiquidStore` 生成。 */
+    val liquidKey: String
+        get() = prefs.getString(KEY_LIQUID_KEY, "").orEmpty()
+
+    fun setLiquidKey(key: String?) {
+        prefs.edit().putString(KEY_LIQUID_KEY, key.orEmpty()).commit()
+    }
+
     /**
      * 上一次「应用」时记下的 **key 与 crop.json 的 mtime**（2026-11-05）。
      *
@@ -940,6 +978,10 @@ class MaskPrefs(context: Context) {
         const val KEY_SPATIAL_SHORT_SIDE = "spatial_short_side"
         /** 空间壁纸是否生效（SystemUI 侧轮询）。 */
         const val KEY_SPATIAL_ACTIVE = "spatial_active"
+        const val KEY_LIQUID_ACTIVE = "liquid_active"
+        const val KEY_LIQUID_MODE = "liquid_mode"
+        const val KEY_LIQUID_SCOPE = "liquid_scope"
+        const val KEY_LIQUID_KEY = "liquid_key"
 
         /** 「应用」时记下的 crop 指纹（见 `spatialAppliedCropKey`）。 */
         const val KEY_SPATIAL_APPLIED_CROP_KEY = "spatial_applied_crop_key"

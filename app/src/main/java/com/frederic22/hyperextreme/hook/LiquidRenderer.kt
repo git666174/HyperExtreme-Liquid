@@ -562,8 +562,8 @@ internal object LiquidRenderer {
     /**
      * 当前版本：**系统壁纸**（`WallpaperManager#getDrawable`）。
      *
-     * key 非空时先试 provider `content://…/liquid/<key>/base`（留给后续「用户自选照片」，
-     * provider 那条路由还没加），失败再退回系统壁纸。
+     * key 非空时先试 provider `content://…/liquid/<key>/base`（`LiquidStore` 存的自选素材），
+     * 失败再退回系统壁纸。
      *
      * ⚠️ 锁屏与桌面用**两张不同壁纸**时，这里拿到的是系统给当前用户的默认那张 ——
      * 与锁屏实际显示的可能不是一张。P1 要让 App 侧把锁屏原图经 provider 推过来。

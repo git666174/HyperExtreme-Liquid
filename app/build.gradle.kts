@@ -8,9 +8,17 @@ plugins {
     alias(libs.plugins.compose.compiler)
 }
 
-// 发布签名：机密值不进版本库，改从仓库外的 keystore.properties 读取。
-// 没有该文件时 release 退回 debug 签名 —— 保证 clone 下来就能构建（见 README）。
-val keystoreProps = rootProject.file("keystore.properties").takeIf { it.exists() }?.let { f ->
+// 签名：**仓库内固定一份**，本地与 GitHub Actions 用同一把 key。
+//
+// 为什么必须固定：CI 跑在全新 runner 上，Android debug keystore 是 runner 本地现生成的
+// ⇒ 每次构建签名都不同 ⇒ 覆盖安装必报「签名不一致」，只能先卸载。
+//
+// 优先级：仓库根的 keystore.properties（已 gitignore，私钥不想进库时用）> signing/signing.properties。
+// 换私钥：替换 signing/hyperextreme.p12 并同步 signing.properties；换完要卸载重装一次。
+val keystoreProps = listOf(
+    rootProject.file("keystore.properties"),
+    rootProject.file("signing/signing.properties"),
+).firstOrNull { it.exists() }?.let { f ->
     JavaProperties().apply { f.inputStream().use(::load) }
 }
 
@@ -47,22 +55,29 @@ android {
     }
 
     signingConfigs {
-        // 发布签名（本地模块项目，没有对外服务）：keystore/release.jks
-        // 生成方式（口令只写进 keystore.properties，不要进版本库）：
-        //   keytool -genkeypair -keystore keystore/release.jks -alias <别名> \
-        //     -keyalg RSA -keysize 2048 -validity 10000
-        // 没有 keystore.properties 时不创建这个配置，release 退回 debug 签名。
+        // debug / release **共用**这一份签名：同一台机器、CI、不同次构建签出来完全一致。
+        // 默认取仓库里的 signing/hyperextreme.p12（PKCS12，口令在 signing.properties）；
+        // 没有配置文件时退回 debug keystore —— 只影响 clone 后第一次构建能否直接装。
         if (keystoreProps != null) {
-            create("release") {
+            create("stable") {
                 storeFile = rootProject.file(keystoreProps.getProperty("storeFile"))
                 storePassword = keystoreProps.getProperty("storePassword")
                 keyAlias = keystoreProps.getProperty("keyAlias")
                 keyPassword = keystoreProps.getProperty("keyPassword")
+                storeType = keystoreProps.getProperty("storeType") ?: "PKCS12"
             }
         }
     }
 
     buildTypes {
+        debug {
+            // 与 release 同签名（见 signingConfigs 注释）：否则 CI 产物覆盖安装会签名冲突。
+            signingConfig = if (keystoreProps != null) {
+                signingConfigs.getByName("stable")
+            } else {
+                signingConfigs.getByName("debug")
+            }
+        }
         release {
             // R8 全量裁剪 + 资源收缩。
             //
@@ -75,9 +90,9 @@ android {
             isMinifyEnabled = true
             isShrinkResources = true
             signingConfig = if (keystoreProps != null) {
-                signingConfigs.getByName("release")
+                signingConfigs.getByName("stable")
             } else {
-                logger.warn("未找到 keystore.properties —— release 将使用 debug 签名")
+                logger.warn("未找到 signing/signing.properties —— release 退回 debug 签名（每次 CI 都会变）")
                 signingConfigs.getByName("debug")
             }
             proguardFiles(

@@ -243,6 +243,13 @@ internal fun FunctionHome(onOpen: (DetailPage) -> Unit) {
             title = "光栅壁纸",
             onClick = { onOpen(DetailPage.RasterWallpaper) },
         )
+        // 「液态壁纸」（2026-11-09）：图源=系统当前壁纸，锁屏上一层全屏 GL；
+        // 与空间/光栅同样挂在壁纸 leash 上，三者互斥（同时开抢同一层，未做自动让位）。
+        AppEntryCard(
+            packageName = MiuiWallpaperPackageName,
+            title = "液态壁纸",
+            onClick = { onOpen(DetailPage.LiquidWallpaper) },
+        )
         AppEntryCard(
             packageName = SystemUiPackageName,
             title = "系统界面",
