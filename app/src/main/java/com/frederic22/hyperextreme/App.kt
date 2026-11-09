@@ -102,6 +102,7 @@ class App : Application() {
                 prefs.liquidMode,
                 prefs.liquidTune(prefs.liquidMode),
                 prefs.liquidMask,
+                prefs.liquidQuality,
             )
             // 开关开着但图可能失效（重装/换图）——启动时再推一次给 miwallpaper。
             if (prefs.parallaxCoverDesktop) {

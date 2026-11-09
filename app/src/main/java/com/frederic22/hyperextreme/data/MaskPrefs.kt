@@ -312,6 +312,14 @@ class MaskPrefs(context: Context) {
         prefs.edit().putString(KEY_LIQUID_KEY, key.orEmpty()).commit()
     }
 
+    /** 质感档位：0 柔和 / 1 自然 / 2 真实（见 `LiquidFlag.QUALITY_*`）。 */
+    val liquidQuality: Int
+        get() = prefs.getInt(KEY_LIQUID_QUALITY, 1).let { if (it in 0..2) it else 1 }
+
+    fun setLiquidQuality(value: Int) {
+        prefs.edit().putInt(KEY_LIQUID_QUALITY, if (value in 0..2) value else 1).commit()
+    }
+
     /** 当前模式的参数（每模式一份，见 [LiquidTune] 的类注释）。 */
     fun liquidTune(mode: Int): LiquidTune {
         val key = if (mode == com.frederic22.hyperextreme.data.LiquidFlag.MODE_JELLY) {
@@ -1018,6 +1026,7 @@ class MaskPrefs(context: Context) {
         const val KEY_LIQUID_TUNE_WATER = "liquid_tune_water"
         const val KEY_LIQUID_TUNE_JELLY = "liquid_tune_jelly"
         const val KEY_LIQUID_MASK = "liquid_mask"
+        const val KEY_LIQUID_QUALITY = "liquid_quality"
 
         /** 「应用」时记下的 crop 指纹（见 `spatialAppliedCropKey`）。 */
         const val KEY_SPATIAL_APPLIED_CROP_KEY = "spatial_applied_crop_key"

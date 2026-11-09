@@ -328,6 +328,7 @@ class HookEntry : XposedModule() {
             var lastKey: String? = null
             var lastScope = Int.MIN_VALUE
             var lastMode = Int.MIN_VALUE
+            var lastQuality = Int.MIN_VALUE
             var tick = 0
             HookRuntime.log("LIQUID 轮询已启动（监听属性 ${LiquidFlag.PROP_ACTIVE}）")
             while (true) {
@@ -342,23 +343,29 @@ class HookEntry : XposedModule() {
                     val mode = HookRuntime.systemProperty(LiquidFlag.PROP_MODE).trim()
                         .toIntOrNull()?.let { LiquidFlag.normalizeMode(it) }
                         ?: LiquidFlag.MODE_WATER
+                    val quality = HookRuntime.systemProperty(LiquidFlag.PROP_QUALITY).trim()
+                        .toIntOrNull()?.let { LiquidFlag.normalizeQuality(it) }
+                        ?: LiquidFlag.QUALITY_NATURAL
                     if (tick <= 3 || tick % 60 == 0) {
                         HookRuntime.log(
-                            "LIQUID 轮询 tick=$tick active=$active key=$key scope=$scope mode=$mode " +
-                                "last=$lastKey/$lastScope/$lastMode",
+                            "LIQUID 轮询 tick=$tick active=$active key=$key scope=$scope " +
+                                "mode=$mode quality=$quality last=$lastKey/$lastScope/$lastMode/$lastQuality",
                         )
                     }
                     if (active) {
-                        if (key != lastKey || scope != lastScope || mode != lastMode) {
+                        if (key != lastKey || scope != lastScope || mode != lastMode ||
+                            quality != lastQuality
+                        ) {
                             val ctx = HookRuntime.appContext()
                             if (ctx != null) {
                                 HookRuntime.log(
                                     "LIQUID 开关=开 key=$key scope=$scope mode=$mode → 启动渲染器",
                                 )
-                                LiquidRenderer.start(ctx, key, scope, mode)
+                                LiquidRenderer.start(ctx, key, scope, mode, quality)
                                 lastKey = key
                                 lastScope = scope
                                 lastMode = mode
+                                lastQuality = quality
                             }
                         }
                     } else if (lastKey != null) {
@@ -367,6 +374,7 @@ class HookEntry : XposedModule() {
                         lastKey = null
                         lastScope = Int.MIN_VALUE
                         lastMode = Int.MIN_VALUE
+                        lastQuality = Int.MIN_VALUE
                     }
                 } catch (t: Throwable) {
                     // 轮询线程不许死

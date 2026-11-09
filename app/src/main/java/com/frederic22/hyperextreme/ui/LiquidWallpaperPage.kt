@@ -106,6 +106,7 @@ internal fun LiquidWallpaperDetail(state: MaskUiState) {
     var busy by remember { mutableStateOf(false) }
     var tune by remember { mutableStateOf(prefs.liquidTune(prefs.liquidMode)) }
     var maskCfg by remember { mutableStateOf(prefs.liquidMask) }
+    var quality by remember { mutableIntStateOf(prefs.liquidQuality) }
     var showEditor by remember { mutableStateOf(false) }
 
     /** 滑块拖动时只递增它；[LaunchedEffect] 负责防抖后再推属性。 */
@@ -120,6 +121,7 @@ internal fun LiquidWallpaperDetail(state: MaskUiState) {
             mode = mode,
             tune = tune,
             mask = maskCfg,
+            quality = quality,
         )
     }
 
@@ -334,9 +336,11 @@ internal fun LiquidWallpaperDetail(state: MaskUiState) {
                 }
                 Text(
                     text = if (mode == LiquidFlag.MODE_JELLY) {
-                        "低频大尺度形变 + 回弹：按下去整块「捏」一下，像果冻。"
+                        "弹簧-阻尼粒子网格（软体力学）：按压处凹陷、四周因体积约束鼓起，" +
+                            "松手后欠阻尼回弹 —— 解的是「形状」，不是水面。"
                     } else {
-                        "高频涟漪：点在哪、波从哪散开，松手后自然衰减。"
+                        "二维高度场波动方程（流体表面波）：涟漪按波动方程传播、叠加、衰减，" +
+                            "再由高度梯度重建法线做折射与高光。"
                     },
                     style = MiuixTheme.textStyles.footnote2,
                     color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
@@ -365,12 +369,51 @@ internal fun LiquidWallpaperDetail(state: MaskUiState) {
             }
         }
 
-        // ── 四、参数调节 ──
+        // ── 四、质感 ──
+        SmallTitle(text = "质感")
+        Card(insideMargin = PaddingValues(16.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    ChoiceChip("柔和", quality == LiquidFlag.QUALITY_SOFT) {
+                        haptic()
+                        quality = LiquidFlag.QUALITY_SOFT
+                        prefs.setLiquidQuality(quality)
+                        push()
+                    }
+                    ChoiceChip("自然", quality == LiquidFlag.QUALITY_NATURAL) {
+                        haptic()
+                        quality = LiquidFlag.QUALITY_NATURAL
+                        prefs.setLiquidQuality(quality)
+                        push()
+                    }
+                    ChoiceChip("真实", quality == LiquidFlag.QUALITY_REAL) {
+                        haptic()
+                        quality = LiquidFlag.QUALITY_REAL
+                        prefs.setLiquidQuality(quality)
+                        push()
+                    }
+                }
+                Text(
+                    text = when (quality) {
+                        LiquidFlag.QUALITY_SOFT ->
+                            "柔和：仿真网格 160 宽、果冻 16 列，关掉色散与高光 —— 只保留形变，最省电。"
+                        LiquidFlag.QUALITY_REAL ->
+                            "真实：仿真 288 宽、果冻 24 列，完整色散 + 法线高光 + 菲涅尔。"
+                        else ->
+                            "自然：仿真 224 宽、果冻 20 列，保留高光与色散，去掉菲涅尔。"
+                    },
+                    style = MiuixTheme.textStyles.footnote2,
+                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                )
+            }
+        }
+
+        // ── 五、参数调节 ──
         SmallTitle(text = "参数调节")
         Card(insideMargin = PaddingValues(0.dp)) {
             Column {
                 ParallaxSliderRow(
-                    title = "折射强度",
+                    title = if (mode == LiquidFlag.MODE_JELLY) "形变幅度" else "折射强度",
                     text = "${tune.refract.toInt()} px",
                     value = tune.refract,
                     range = LIQUID_REFRACT_MIN..LIQUID_REFRACT_MAX,
@@ -385,7 +428,7 @@ internal fun LiquidWallpaperDetail(state: MaskUiState) {
                     },
                 )
                 ParallaxSliderRow(
-                    title = "波速",
+                    title = if (mode == LiquidFlag.MODE_JELLY) "刚度" else "波速",
                     text = fmt(tune.c2, 2),
                     value = tune.c2 * 100f,
                     range = 5f..24f,
@@ -400,7 +443,7 @@ internal fun LiquidWallpaperDetail(state: MaskUiState) {
                     },
                 )
                 ParallaxSliderRow(
-                    title = "回弹（阻尼）",
+                    title = if (mode == LiquidFlag.MODE_JELLY) "回弹阻尼" else "回弹（阻尼）",
                     text = fmt(tune.damp, 3),
                     value = tune.damp * 1000f,
                     range = 960f..999f,
@@ -415,7 +458,7 @@ internal fun LiquidWallpaperDetail(state: MaskUiState) {
                     },
                 )
                 ParallaxSliderRow(
-                    title = "触点大小",
+                    title = if (mode == LiquidFlag.MODE_JELLY) "按压半径" else "触点大小",
                     text = "${(tune.sigma * 100f).toInt()}",
                     value = tune.sigma * 1000f,
                     range = 20f..150f,
@@ -430,7 +473,7 @@ internal fun LiquidWallpaperDetail(state: MaskUiState) {
                     },
                 )
                 ParallaxSliderRow(
-                    title = "倾斜跟随",
+                    title = if (mode == LiquidFlag.MODE_JELLY) "重力影响" else "倾斜跟随",
                     text = "${(tune.level * 100f).toInt()}%",
                     value = tune.level * 100f,
                     range = 0f..100f,
@@ -447,7 +490,7 @@ internal fun LiquidWallpaperDetail(state: MaskUiState) {
             }
         }
 
-        // ── 五、选区（涂抹）──
+        // ── 六、选区（涂抹）──
         SmallTitle(text = "选区")
         Card(insideMargin = PaddingValues(16.dp)) {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -501,7 +544,7 @@ internal fun LiquidWallpaperDetail(state: MaskUiState) {
             }
         }
 
-        // ── 六、生效范围 ──
+        // ── 七、生效范围 ──
         SmallTitle(text = "生效范围")
         Card(insideMargin = PaddingValues(16.dp)) {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {

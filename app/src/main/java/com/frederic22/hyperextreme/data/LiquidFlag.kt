@@ -46,8 +46,11 @@ object LiquidFlag {
     /** 可调参数（`refract,c2,damp,sigma,level` 定点编码，见 [LiquidTune]）。 */
     const val PROP_TUNE = "debug.hyperextreme.liquid_tune"
 
-    /** 选区（`on,centerY,radius` 定点编码，见 [LiquidMask]）。 */
+    /** 选区（`on,stamp`，见 [LiquidMask]）。 */
     const val PROP_MASK = "debug.hyperextreme.liquid_mask"
+
+    /** 质感档位：0 柔和 / 1 自然 / 2 真实（决定仿真分辨率与光学复杂度）。 */
+    const val PROP_QUALITY = "debug.hyperextreme.liquid_quality"
 
     /**
      * 渲染器是否真的在出帧（1 = 已挂上并画过）。
@@ -60,10 +63,16 @@ object LiquidFlag {
     const val MODE_WATER = 0
     const val MODE_JELLY = 1
 
+    const val QUALITY_SOFT = 0
+    const val QUALITY_NATURAL = 1
+    const val QUALITY_REAL = 2
+
     /** 合法档位白名单（越界回落锁屏）。 */
     fun normalizeScope(scope: Int): Int = if (scope in 0..2) scope else MaskPrefs.SPATIAL_SCOPE_LOCK
 
     fun normalizeMode(mode: Int): Int = if (mode == MODE_JELLY) MODE_JELLY else MODE_WATER
+
+    fun normalizeQuality(quality: Int): Int = if (quality in 0..2) quality else QUALITY_NATURAL
 
     /** 异步写属性；root 不可用时静默失败（界面状态仍然正确，只是不生效）。 */
     fun push(
@@ -73,6 +82,7 @@ object LiquidFlag {
         mode: Int,
         tune: LiquidTune = LiquidTune.WATER,
         mask: LiquidMask = LiquidMask.FULL,
+        quality: Int = QUALITY_NATURAL,
     ) {
         Thread {
             val r = runCatching {
@@ -82,7 +92,8 @@ object LiquidFlag {
                         "setprop $PROP_SCOPE ${normalizeScope(scope)}; " +
                         "setprop $PROP_MODE ${normalizeMode(mode)}; " +
                         "setprop $PROP_TUNE ${tune.encode()}; " +
-                        "setprop $PROP_MASK ${mask.encode()}",
+                        "setprop $PROP_MASK ${mask.encode()}; " +
+                        "setprop $PROP_QUALITY ${normalizeQuality(quality)}",
                 )
             }.getOrNull()
             if (r == null || !r.ok) {
@@ -107,6 +118,7 @@ object LiquidFlag {
         mode: Int,
         tune: LiquidTune = LiquidTune.WATER,
         mask: LiquidMask = LiquidMask.FULL,
+        quality: Int = QUALITY_NATURAL,
     ) {
         Thread {
             val script = "setprop $PROP_ACTIVE 0; " +
@@ -116,7 +128,8 @@ object LiquidFlag {
                 "setprop $PROP_SCOPE ${normalizeScope(scope)}; " +
                 "setprop $PROP_MODE ${normalizeMode(mode)}; " +
                 "setprop $PROP_TUNE ${tune.encode()}; " +
-                "setprop $PROP_MASK ${mask.encode()}"
+                "setprop $PROP_MASK ${mask.encode()}; " +
+                "setprop $PROP_QUALITY ${normalizeQuality(quality)}"
             val r = runCatching { RootShell.run(script) }.getOrNull()
             if (r == null || !r.ok) {
                 Log.w(

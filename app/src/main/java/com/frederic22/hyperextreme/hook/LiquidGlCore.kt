@@ -214,6 +214,7 @@ internal object LiquidGlCore {
         uniform sampler2D uBase;
         uniform sampler2D uSim;
         uniform sampler2D uMaskTex;
+        uniform sampler2D uDispTex;
         uniform vec2  uTexel;
         uniform vec2  uScreen;
         uniform vec2  uImgScale;
@@ -222,6 +223,7 @@ internal object LiquidGlCore {
         uniform float uDisp;
         uniform float uSpec;
         uniform float uJelly;
+        uniform float uFx;
         uniform vec3  uLight;
 
         float H(vec2 uv) { return texture2D(uSim, uv).r * 2.0 - 1.0; }
@@ -237,7 +239,6 @@ internal object LiquidGlCore {
             float hr = H(vUv + vec2(uTexel.x, 0.0));
             float hu = H(vUv - vec2(0.0, uTexel.y));
             float hd = H(vUv + vec2(0.0, uTexel.y));
-            float h  = H(vUv);
 
             // 梯度换成「每像素」口径：uv 两轴的像素跨度不同，直接对 uv 求导会让
             // 竖屏上的横向位移比纵向弱一倍多。这里除回像素，再乘 uRefract 得像素位移。
@@ -248,24 +249,39 @@ internal object LiquidGlCore {
 
             float m = maskAt(vUv);
 
-            // CENTER_CROP + 安全余量（CPU 算好），再翻 y：Bitmap 第 0 行在顶部。
-            vec2 uv = (vUv - 0.5) * uImgScale + 0.5;
-            uv.y = 1.0 - uv.y;
-
-            // 果冻模式：整幅图跟着 h 做一次径向挤压（整体「捏一下」的观感）
+            // 屏幕空间位移：
+            //   水波 = 高度梯度（光学折射，带色散）；
+            //   果冻 = 粒子网格的位移纹理（几何形变，不该有色边）。
+            vec2 s = vUv;
+            vec2 d = vec2(0.0);
             if (uJelly > 0.5) {
-                uv = (uv - 0.5) * (1.0 + h * 0.06) + 0.5;
+                vec2 e = texture2D(uDispTex, vUv).rg * 255.0;
+                // uRefract 在果冻模式里复用为「形变幅度」（页面滑块直接生效）
+                s -= (e - 128.0) / 2048.0 * (uRefract / 3000.0) * m;
+            } else {
+                d = gpx * uRefract / uScreen * m;
+                s += d;
             }
 
-            vec2 d = gpx * uRefract / uScreen * m;
-            vec3 col;
-            col.r = texture2D(uBase, uv + d * (1.0 + uDisp)).r;
-            col.g = texture2D(uBase, uv + d).g;
-            col.b = texture2D(uBase, uv + d * (1.0 - uDisp)).b;
+            // CENTER_CROP + 安全余量（CPU 算好），再翻 y：Bitmap 第 0 行在顶部。
+            vec2 uv = (s - 0.5) * uImgScale + 0.5;
+            uv.y = 1.0 - uv.y;
 
-            vec3 n = normalize(vec3(-gpx * 120.0, 1.0));
-            float spec = pow(max(dot(n, normalize(uLight)), 0.0), 28.0);
-            col += vec3(spec * uSpec);
+            vec3 col;
+            if (uJelly > 0.5) {
+                col = texture2D(uBase, uv).rgb;
+            } else {
+                // 质感分级：柔和只留位移；自然加高光与色散；真实再加菲涅尔
+                float dispOn = step(1.0, uFx);
+                float fresOn = step(2.0, uFx);
+                col.r = texture2D(uBase, uv + d * uDisp * dispOn).r;
+                col.g = texture2D(uBase, uv).g;
+                col.b = texture2D(uBase, uv - d * uDisp * dispOn).b;
+                vec3 n = normalize(vec3(-gpx * 120.0, 1.0));
+                float spec = pow(max(dot(n, normalize(uLight)), 0.0), 28.0) * dispOn;
+                float fres = pow(1.0 - clamp(n.z, 0.0, 1.0), 4.0) * fresOn;
+                col += vec3(spec * uSpec + fres * 0.05);
+            }
 
             gl_FragColor = vec4(col, 1.0);
         }

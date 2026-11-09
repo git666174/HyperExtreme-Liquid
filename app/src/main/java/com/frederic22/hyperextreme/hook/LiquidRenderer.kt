@@ -108,6 +108,7 @@ internal object LiquidRenderer {
     private var runKey = ""
     private var runScope = -1
     private var runMode = -1
+    private var quality = LiquidFlag.QUALITY_NATURAL
     private var params: LiquidGlCore.Params = LiquidGlCore.WATER
 
     private var appContext: Context? = null
@@ -140,6 +141,8 @@ internal object LiquidRenderer {
     private var dBase = 0
     private var dSim = 0
     private var dMask = 0
+    private var dDispTex = 0
+    private var dFx = 0
     private var dMaskOn = 0
     private var dTexel = 0
     private var dScreen = 0
@@ -153,6 +156,11 @@ internal object LiquidRenderer {
     private var quad: FloatBuffer? = null
 
     private var baseTex = 0
+    private var dispTex = 0
+    private var dispW = 0
+    private var dispH = 0
+    /** 果冻模式的弹簧-阻尼粒子网格（与高度场无关，见 LiquidJellySim） */
+    private val jelly = LiquidJellySim()
     private var maskTex = 0
     private var maskStamp = -1L
     private var maskLoadedKey = ""
@@ -206,10 +214,21 @@ internal object LiquidRenderer {
     /** 是否在跑（触摸桥每来一个事件读一次，必须便宜）。 */
     val isRunning: Boolean get() = running
 
-    fun start(ctx: Context?, key: String, scope: Int, mode: Int) {
+    fun start(
+        ctx: Context?,
+        key: String,
+        scope: Int,
+        mode: Int,
+        quality: Int = LiquidFlag.QUALITY_NATURAL,
+    ) {
         val normalizedScope = LiquidFlag.normalizeScope(scope)
         val normalizedMode = LiquidFlag.normalizeMode(mode)
-        if (running && key == runKey && normalizedScope == runScope && normalizedMode == runMode) return
+        val normalizedQuality = LiquidFlag.normalizeQuality(quality)
+        if (running && key == runKey && normalizedScope == runScope &&
+            normalizedMode == runMode && normalizedQuality == this.quality
+        ) {
+            return
+        }
         if (ctx == null) {
             HookRuntime.log("LIQUID 启动失败：拿不到 Context")
             return
@@ -217,7 +236,7 @@ internal object LiquidRenderer {
         val app = ctx.applicationContext ?: ctx
         val h = ensureHandler()
         h.post {
-            runCatching { startInternal(app, key, normalizedScope, normalizedMode) }
+            runCatching { startInternal(app, key, normalizedScope, normalizedMode, normalizedQuality) }
                 .onFailure {
                     HookRuntime.log("LIQUID 启动异常：${it.javaClass.simpleName}: ${it.message}")
                     // 半途失败必须清掉已经建出来的 SC / EGL，否则会留一层僵尸在 SurfaceFlinger 里
@@ -241,7 +260,7 @@ internal object LiquidRenderer {
 
     // ─────────────────────────── 启动 ───────────────────────────
 
-    private fun startInternal(ctx: Context, key: String, scope: Int, mode: Int) {
+    private fun startInternal(ctx: Context, key: String, scope: Int, mode: Int, quality: Int) {
         stopInternal("重启")
         // 上一次会话残留的触点 / 姿态一律作废，否则新的一帧会先被「上一把的波纹」踢一下
         touches.clear()
@@ -253,6 +272,7 @@ internal object LiquidRenderer {
         runKey = key
         runScope = scope
         runMode = mode
+        this.quality = quality
         tune = if (mode == LiquidFlag.MODE_JELLY) LiquidTune.JELLY else LiquidTune.WATER
         params = LiquidGlCore.params(mode, tune)
         maskCfg = LiquidMask.FULL
@@ -494,6 +514,8 @@ internal object LiquidRenderer {
         dBase = GLES20.glGetUniformLocation(drawProgram, "uBase")
         dSim = GLES20.glGetUniformLocation(drawProgram, "uSim")
         dMask = GLES20.glGetUniformLocation(drawProgram, "uMaskTex")
+        dDispTex = GLES20.glGetUniformLocation(drawProgram, "uDispTex")
+        dFx = GLES20.glGetUniformLocation(drawProgram, "uFx")
         dMaskOn = GLES20.glGetUniformLocation(drawProgram, "uMaskOn")
         dTexel = GLES20.glGetUniformLocation(drawProgram, "uTexel")
         dScreen = GLES20.glGetUniformLocation(drawProgram, "uScreen")
@@ -513,7 +535,12 @@ internal object LiquidRenderer {
         quad = ByteBuffer.allocateDirect(verts.size * 4)
             .order(ByteOrder.nativeOrder()).asFloatBuffer().apply { put(verts); position(0) }
 
-        simW = LiquidGlCore.SIM_WIDTH
+        // 质感档位决定仿真网格宽度：柔和 160 / 自然 224 / 真实 288（渲染始终是屏幕分辨率）
+        simW = when (quality) {
+            LiquidFlag.QUALITY_SOFT -> 160
+            LiquidFlag.QUALITY_REAL -> 288
+            else -> 224
+        }
         simH = max(2, (simW.toFloat() * screenH / screenW).toInt())
         for (i in 0..1) {
             simTex[i] = newTexture(simW, simH)
@@ -569,10 +596,15 @@ internal object LiquidRenderer {
         simTex[0] = 0; simTex[1] = 0
         simFbo[0] = 0; simFbo[1] = 0
         baseTex = 0
+        if (dispTex != 0) GLES20.glDeleteTextures(1, intArrayOf(dispTex), 0)
+        dispTex = 0
+        dispW = 0
+        dispH = 0
         if (maskTex != 0) GLES20.glDeleteTextures(1, intArrayOf(maskTex), 0)
         maskTex = 0
         maskStamp = -1L
         maskLoadedKey = ""
+        jelly.reset()
         simProgram = 0
         drawProgram = 0
     }
@@ -826,8 +858,12 @@ internal object LiquidRenderer {
         }
     }
 
-    /** 模拟 pass：读上一帧 → 波动 → 注入 → 写另一张纹理。 */
+    /** 模拟 pass：水波走高度场 FBO；果冻走 CPU 弹簧网格 + 位移纹理上传。 */
     private fun stepSim() {
+        if (runMode == LiquidFlag.MODE_JELLY) {
+            stepJelly()
+            return
+        }
         GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, simFbo[1 - simCur])
         GLES20.glViewport(0, 0, simW, simH)
         GLES20.glDisable(GLES20.GL_BLEND)
@@ -863,6 +899,50 @@ internal object LiquidRenderer {
         GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0)
     }
 
+    /**
+     * 果冻的一帧：弹簧网格积分 → 位移场编码上传。
+     *
+     * 参数映射（页面滑块 → 物理量）：
+     * * 波速 c2 → 刚度 k0（80~300 1/s²）；
+     * * 回弹 damp → 弹簧阻尼（3~20 1/s，越小越「Duang」）；
+     * * 倾斜跟随 level → 面积压力（0~120）；
+     * * 触点 sigma 在 [LiquidJellySim.press] 里是固定的 2.6 格半径。
+     */
+    private fun stepJelly() {
+        val sim = jelly
+        sim.ensure(screenW, screenH, when (quality) {
+            LiquidFlag.QUALITY_SOFT -> 16
+            LiquidFlag.QUALITY_REAL -> 24
+            else -> 20
+        })
+        if (dispTex == 0 || dispW != sim.nx || dispH != sim.ny) {
+            if (dispTex != 0) GLES20.glDeleteTextures(1, intArrayOf(dispTex), 0)
+            dispTex = newTexture(sim.nx, sim.ny)
+            dispW = sim.nx
+            dispH = sim.ny
+        }
+        var n = 0
+        while (n < 2) {
+            val t = touches.poll() ?: break
+            sim.press(t[0], t[1], t[2])
+            n++
+        }
+        // 映射口径：k≈150~300 对应 2~2.7Hz 的「Duang」；c 取 ζ≈0.3（欠阻尼一次过冲）
+        val stiffness = 90f + tune.c2 * 900f
+        val damping = 1f + (tune.damp - 0.950f) * 250f
+        val pressure = 20f + tune.level * 100f
+        val gScale = tune.level * 8f
+        sim.step(
+            dt = 1f / 60f,
+            stiffness = stiffness,
+            damping = damping,
+            pressure = pressure,
+            gx = tiltX * gScale,
+            gy = tiltY * gScale,
+        )
+        sim.upload(dispTex)
+    }
+
     /** 合成 pass：∇h 折射采样 base。 */
     private fun drawComposite() {
         GLES20.glViewport(0, 0, screenW, screenH)
@@ -887,6 +967,10 @@ internal object LiquidRenderer {
         GLES20.glUniform2f(dScreen, screenW.toFloat(), screenH.toFloat())
         GLES20.glUniform2f(dImgScale, imgScale[0], imgScale[1])
         GLES20.glUniform1f(dMaskOn, if (maskOn()) 1f else 0f)
+        GLES20.glUniform1f(dFx, quality.toFloat())
+        GLES20.glActiveTexture(GLES20.GL_TEXTURE3)
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, dispTex)
+        GLES20.glUniform1i(dDispTex, 3)
         GLES20.glUniform1f(dRefract, params.refract)
         GLES20.glUniform1f(dDisp, params.dispersion)
         GLES20.glUniform1f(dSpec, params.specular)
