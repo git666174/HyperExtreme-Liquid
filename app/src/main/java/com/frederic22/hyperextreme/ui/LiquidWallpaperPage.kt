@@ -37,6 +37,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.frederic22.hyperextreme.data.LiquidFlag
+import com.frederic22.hyperextreme.data.LiquidMask
 import com.frederic22.hyperextreme.data.LiquidStore
 import com.frederic22.hyperextreme.data.LiquidTune
 import com.frederic22.hyperextreme.data.MaskPrefs
@@ -51,6 +52,22 @@ import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.SmallTitle
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.theme.MiuixTheme
+import android.graphics.Bitmap
+import android.graphics.Paint as AndroidPaint
+import android.graphics.Path as AndroidPath
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 
 /**
  * 二级页「液态壁纸」（2026-11-09 建立；同日补自选素材；P5 补参数滑块与预设）。
@@ -89,6 +106,7 @@ internal fun LiquidWallpaperDetail(state: MaskUiState) {
     var busy by remember { mutableStateOf(false) }
     var tune by remember { mutableStateOf(prefs.liquidTune(prefs.liquidMode)) }
     var maskCfg by remember { mutableStateOf(prefs.liquidMask) }
+    var showEditor by remember { mutableStateOf(false) }
 
     /** 滑块拖动时只递增它；[LaunchedEffect] 负责防抖后再推属性。 */
     var pushTick by remember { mutableIntStateOf(0) }
@@ -140,6 +158,9 @@ internal fun LiquidWallpaperDetail(state: MaskUiState) {
             val old = key
             key = newKey
             prefs.setLiquidKey(newKey)
+            // 遮罩是按屏幕涂抹的，但存在旧图 key 下；换图后直接回到全图，避免「看起来没生效」
+            maskCfg = maskCfg.copy(on = false)
+            prefs.setLiquidMask(maskCfg)
             push()
             if (old.isNotEmpty() && old != newKey) LiquidStore.delete(ctx, old)
             Toast.makeText(ctx, "素材已更新，锁屏查看", Toast.LENGTH_SHORT).show()
@@ -212,6 +233,8 @@ internal fun LiquidWallpaperDetail(state: MaskUiState) {
                                 haptic()
                                 key = ""
                                 prefs.setLiquidKey("")
+                                maskCfg = maskCfg.copy(on = false)
+                                prefs.setLiquidMask(maskCfg)
                                 push()
                             },
                             enabled = !busy,
@@ -424,65 +447,56 @@ internal fun LiquidWallpaperDetail(state: MaskUiState) {
             }
         }
 
-        // ── 五、选区 ──
+        // ── 五、选区（涂抹）──
         SmallTitle(text = "选区")
-        Card(insideMargin = PaddingValues(0.dp)) {
-            Column {
-                Row(
-                    modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 12.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
+        Card(insideMargin = PaddingValues(16.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     ChoiceChip("全图", !maskCfg.on) {
                         haptic()
                         maskCfg = maskCfg.copy(on = false)
                         prefs.setLiquidMask(maskCfg)
                         push()
                     }
-                    ChoiceChip("局部", maskCfg.on) {
+                    ChoiceChip("涂抹", maskCfg.on) {
                         haptic()
-                        maskCfg = maskCfg.copy(on = true)
-                        prefs.setLiquidMask(maskCfg)
-                        push()
+                        if (key.isEmpty()) {
+                            Toast.makeText(ctx, "先选一张图片，再涂抹选区", Toast.LENGTH_SHORT).show()
+                        } else {
+                            showEditor = true
+                        }
                     }
                 }
+                Text(
+                    text = if (maskCfg.on) {
+                        "只有涂抹区域有液体。想改范围点「重新涂抹」重画一遍（会覆盖上一次）。"
+                    } else {
+                        "全图：整张壁纸都是液体。选「涂抹」进入全屏画布，用手指画出有液体的区域。"
+                    },
+                    style = MiuixTheme.textStyles.footnote2,
+                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                )
                 if (maskCfg.on) {
-                    ParallaxSliderRow(
-                        title = "选区位置",
-                        text = "${(maskCfg.centerY * 100f).toInt()}%",
-                        value = maskCfg.centerY,
-                        range = 0f..1f,
-                        steps = 19,
-                        onValueChange = {
-                            maskCfg = maskCfg.copy(centerY = it)
-                            pushTick++
+                    Button(
+                        onClick = {
+                            haptic()
+                            showEditor = true
                         },
-                        onFinished = {
-                            prefs.setLiquidMask(maskCfg)
-                            push()
-                        },
-                    )
-                    ParallaxSliderRow(
-                        title = "选区大小",
-                        text = "${(maskCfg.radius * 100f).toInt()}%",
-                        value = maskCfg.radius,
-                        range = 0.15f..0.60f,
-                        steps = 8,
-                        onValueChange = {
-                            maskCfg = maskCfg.copy(radius = it)
-                            pushTick++
-                        },
-                        onFinished = {
-                            prefs.setLiquidMask(maskCfg)
-                            push()
-                        },
-                    )
-                } else {
-                    Text(
-                        text = "全图：整张壁纸都是液体。切到「局部」可把液体限制在一块软椭圆区域里。",
-                        style = MiuixTheme.textStyles.footnote2,
-                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                        modifier = Modifier.padding(16.dp),
-                    )
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.buttonColorsPrimary(
+                            color = MiuixTheme.colorScheme.surfaceContainerHigh,
+                            disabledColor = MiuixTheme.colorScheme.surfaceContainerHigh,
+                            contentColor = MiuixTheme.colorScheme.primary,
+                            disabledContentColor = MiuixTheme.colorScheme.primary,
+                        ),
+                    ) {
+                        Text(
+                            text = "重新涂抹",
+                            style = MiuixTheme.textStyles.button,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
                 }
             }
         }
@@ -522,6 +536,35 @@ internal fun LiquidWallpaperDetail(state: MaskUiState) {
             modifier = Modifier.padding(horizontal = 4.dp),
         )
         Spacer(Modifier.height(24.dp))
+    }
+
+    if (showEditor) {
+        val editorImage = remember(key, showEditor) { LiquidStore.preview(ctx, key, 1080) }
+        if (editorImage != null) {
+            MaskEditorDialog(
+                image = editorImage,
+                onDismiss = { showEditor = false },
+                onSave = { strokes ->
+                    val dm = android.content.res.Resources.getSystem().displayMetrics
+                    val mw = 480
+                    val mh = (mw * dm.heightPixels / dm.widthPixels).coerceAtLeast(2)
+                    val bmp = buildMaskBitmap(strokes, mw, mh)
+                    if (bmp != null && key.isNotEmpty()) {
+                        LiquidStore.saveMask(ctx, key, bmp)
+                        bmp.recycle()
+                        // stamp 换一个值 ⇒ 渲染器下一次读属性时重新拉遮罩
+                        maskCfg = LiquidMask(
+                            on = true,
+                            stamp = (System.currentTimeMillis() / 1000L).toInt() and 0x7fffffff,
+                        )
+                        prefs.setLiquidMask(maskCfg)
+                        push()
+                        Toast.makeText(ctx, "选区已保存", Toast.LENGTH_SHORT).show()
+                    }
+                    showEditor = false
+                },
+            )
+        }
     }
 }
 
@@ -570,3 +613,180 @@ private fun RowScope.ChoiceChip(text: String, selected: Boolean, onClick: () -> 
 private fun RowScope.PresetChip(text: String, selected: Boolean, onClick: () -> Unit) {
     ChoiceChip(text = text, selected = selected, onClick = onClick)
 }
+
+/**
+ * 全屏涂抹编辑器（2026-11-09）。
+ *
+ * 为什么是全屏：锁屏壁纸按 `CENTER_CROP` 铺满屏幕，只有**同比例**的画布上涂抹，
+ * 笔迹与锁屏上的区域才一一对应。页内小预览框比例不对，涂出来会纵向拉伸。
+ *
+ * 笔迹用归一化坐标记（0..1），保存时再按目标分辨率栅格化 —— 与设备分辨率解耦。
+ */
+@Composable
+private fun MaskEditorDialog(
+    image: Bitmap,
+    onDismiss: () -> Unit,
+    onSave: (List<List<Offset>>) -> Unit,
+) {
+    var strokes by remember { mutableStateOf<List<List<Offset>>>(emptyList()) }
+    var active by remember { mutableStateOf<List<Offset>>(emptyList()) }
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(
+            usePlatformDefaultWidth = false,
+            decorFitsSystemWindows = false,
+        ),
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black),
+        ) {
+            Canvas(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .pointerInput(Unit) {
+                        fun norm(p: Offset): Offset = Offset(
+                            (p.x / size.width).coerceIn(0f, 1f),
+                            (p.y / size.height).coerceIn(0f, 1f),
+                        )
+                        detectDragGestures(
+                            onDragStart = { p -> active = listOf(norm(p)) },
+                            onDrag = { change, _ ->
+                                if (active.size < 600) active = active + norm(change.position)
+                            },
+                            onDragEnd = {
+                                if (active.isNotEmpty()) strokes = strokes + listOf(active)
+                                active = emptyList()
+                            },
+                            onDragCancel = { active = emptyList() },
+                        )
+                    },
+            ) {
+                val scale = maxOf(size.width / image.width, size.height / image.height)
+                val dw = image.width * scale
+                val dh = image.height * scale
+                drawImage(
+                    image = image.asImageBitmap(),
+                    srcOffset = IntOffset.Zero,
+                    srcSize = IntSize(image.width, image.height),
+                    dstOffset = IntOffset(
+                        ((size.width - dw) / 2f).toInt(),
+                        ((size.height - dh) / 2f).toInt(),
+                    ),
+                    dstSize = IntSize(dw.toInt(), dh.toInt()),
+                )
+                val paintAlpha = Color.White.copy(alpha = 0.45f)
+                val stroke = Stroke(
+                    width = size.width * 0.11f,
+                    cap = StrokeCap.Round,
+                    join = StrokeJoin.Round,
+                )
+                (strokes + listOf(active)).forEach { pts ->
+                    if (pts.isEmpty()) return@forEach
+                    if (pts.size == 1) {
+                        drawCircle(
+                            color = paintAlpha,
+                            radius = size.width * 0.055f,
+                            center = Offset(pts[0].x * size.width, pts[0].y * size.height),
+                        )
+                    } else {
+                        val path = Path()
+                        pts.forEachIndexed { i, p ->
+                            val x = p.x * size.width
+                            val y = p.y * size.height
+                            if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
+                        }
+                        drawPath(path = path, color = paintAlpha, style = stroke)
+                    }
+                }
+            }
+
+            Text(
+                text = "用手指涂抹：白色区域会有液体",
+                style = MiuixTheme.textStyles.body2,
+                color = Color.White,
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(top = 56.dp, start = 24.dp, end = 24.dp),
+            )
+
+            Row(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .padding(24.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Button(
+                    onClick = { strokes = emptyList() },
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Text(
+                        text = "清除",
+                        style = MiuixTheme.textStyles.button,
+                        modifier = Modifier.fillMaxWidth(),
+                        textAlign = TextAlign.Center,
+                    )
+                }
+                Button(
+                    onClick = onDismiss,
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Text(
+                        text = "取消",
+                        style = MiuixTheme.textStyles.button,
+                        modifier = Modifier.fillMaxWidth(),
+                        textAlign = TextAlign.Center,
+                    )
+                }
+                Button(
+                    onClick = { onSave(strokes) },
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Text(
+                        text = "保存",
+                        style = MiuixTheme.textStyles.button,
+                        modifier = Modifier.fillMaxWidth(),
+                        textAlign = TextAlign.Center,
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** 把归一化笔迹栅格化成遮罩位图：黑底白笔（白 = 有液体）。 */
+private fun buildMaskBitmap(strokes: List<List<Offset>>, w: Int, h: Int): Bitmap? = runCatching {
+    if (w <= 0 || h <= 0) return null
+    val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+    val canvas = android.graphics.Canvas(bmp)
+    canvas.drawColor(android.graphics.Color.BLACK)
+    val paint = AndroidPaint(AndroidPaint.ANTI_ALIAS_FLAG).apply {
+        color = android.graphics.Color.WHITE
+        style = AndroidPaint.Style.STROKE
+        strokeWidth = w * 0.11f
+        strokeCap = AndroidPaint.Cap.ROUND
+        strokeJoin = AndroidPaint.Join.ROUND
+    }
+    val fill = AndroidPaint(AndroidPaint.ANTI_ALIAS_FLAG).apply {
+        color = android.graphics.Color.WHITE
+        style = AndroidPaint.Style.FILL
+    }
+    strokes.forEach { pts ->
+        if (pts.isEmpty()) return@forEach
+        if (pts.size == 1) {
+            canvas.drawCircle(pts[0].x * w, pts[0].y * h, w * 0.055f, fill)
+        } else {
+            val path = AndroidPath()
+            pts.forEachIndexed { i, p ->
+                val x = p.x * w
+                val y = p.y * h
+                if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
+            }
+            canvas.drawPath(path, paint)
+        }
+    }
+    bmp
+}.getOrNull()

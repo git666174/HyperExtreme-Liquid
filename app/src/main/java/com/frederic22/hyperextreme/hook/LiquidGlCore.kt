@@ -15,42 +15,54 @@ import android.opengl.GLES20
  * ② draw  ：全屏 quad，由 ∇h 折射采样原图 + 色散 + 高光
  * ```
  *
- * **为什么是速度式而不是「两帧高度」式**：只需要一张纹理（R=h、G=v），
- * 8 位精度下少一张纹理就少一半带宽；而且阻尼直接乘在 v 上，不会像
- * `h' = 2h - h0 + c²∇²h` 那样把阻尼变成「改波速」，参数更好调。
+ * ## 为什么是速度式
  *
- * ## 为什么 GLES2 也能跑
+ * 只需要一张纹理（R=h、G=v）；阻尼直接乘在 v 上，不会像 `h' = 2h - h0 + c²∇²h`
+ * 那样把阻尼变成「改波速」，参数更好调。
  *
- * 不依赖浮点纹理、不依赖顶点纹理采样、不依赖 MRT：
- * * h/v 用 RGBA8 的 R/G 两通道存，±1 映射到 0..1（用 `*2-1` 解码）；
- * * 折射全部在 fragment 里做 UV 偏移，顶点着色器只负责铺一个全屏 quad；
- * * 只在 draw pass 里采样 base，sim pass 采样自己的上一帧 + mask。
+ * ## 8 位高度场的两个真机教训（2026-11-09）
  *
- * ## 稳定性（必读）
+ * 1. **高频噪声**：每帧把 h 写回 RGBA8 都会带 ±1/510 的量化误差，而波动方程
+ *    对最短波长（交替正负）增益最大 ⇒ 这些误差会被放大成「满屏细密抖动」。
+ *    解法是加一步**粘度**（[uVisc]）：对 h 做一次邻居平均插值，只压短波
+ *    （λ=2 纹素每帧衰减 ~40%），大尺度波几乎不受影响（λ=64 纹素 ~0.2%/帧）。
+ * 2. **永远停不下来**：`uDamp` 接近 1 时能量散得极慢，加上重力弹簧会持续注入能量，
+ *    画面会一直「呼吸」。除了把默认阻尼调低，`LiquidRenderer` 还会在**无输入 2s 后
+ *    把阻尼逐步压到 0.55**，强制收敛到平静水面。
  *
- * 五点拉普拉斯的显式积分要求 `c² ≤ 0.25`（归一化网格 dx=1）。水波取 0.18、
- * 果冻取 0.09，都留了余量。**调大 c² 会直接炸成满屏雪花**，不是「波更大」。
+ * ## 稳定性
+ *
+ * 五点拉普拉斯显式积分要求 `c² ≤ 0.25`（归一化网格 dx=1）。水波 0.14、果冻 0.07。
+ * **调大 c² 会直接炸成雪花**，不是「波更大」。
  */
 internal object LiquidGlCore {
 
-    /** 模拟宽度：256 已经够（水面不需要清晰），再大只是白烧带宽。 */
+    /** 模拟宽度：256 已够（水面不需要清晰），再大只是白烧带宽。 */
     const val SIM_WIDTH = 256
 
-    /** 一次最多注入两个触点 —— 手指最多两根，多出来的丢弃，不影响观感。 */
+    /** 一次最多注入两个触点。 */
     const val MAX_SPLATS = 2
+
+    /**
+     * 粘度（每帧把 h 向邻居平均拉多少）。
+     *
+     * 这是 8 位纹理下「画面像雪花」的解药，也是「水波太密」的手感旋钮：
+     * 调大 ⇒ 只剩大波浪；调小 ⇒ 细节更多，但量化噪声会回来。0.10~0.18 是可用区间。
+     */
+    const val VISCOSITY = 0.14f
 
     /**
      * 一套物理 / 观感参数。水波与果冻的差别**全部在这几个数里**，
      * 不是两套代码 —— 这样切模式不会出现「换了条路径所以行为不一致」。
      */
     class Params(
-        /** 波速平方（≤0.25，见类注释的稳定性）。 */
+        /** 波速平方（≤0.24，见类注释的稳定性）。 */
         val c2: Float,
         /** 每帧速度阻尼：越接近 1 越「荡得久」。 */
         val damp: Float,
         /** 液面跟随重力的强度：0 = 水永远平，1 = 完全跟着手机倾斜。 */
         val level: Float,
-        /** 每 1.0 的「h/像素」梯度对应的**像素位移**（4000 上下是 OriginOS 那种克制感）。 */
+        /** 每 1.0 的「h/像素」梯度对应的**像素位移**。 */
         val refract: Float,
         /** 色散：R/G/B 三通道错位比例。 */
         val dispersion: Float,
@@ -64,7 +76,7 @@ internal object LiquidGlCore {
      * 把「模式骨架」和「用户调参」合成一份运行参数。
      *
      * 骨架（色散/高光/果冻挤压）跟模式走；五个手感量（折射/波速/阻尼/触点/液面）
-     * 全部来自 [LiquidTune] —— 页面滑块改的就是这五个。
+     * 全部来自 `LiquidTune` —— 页面滑块改的就是这五个。
      */
     fun params(mode: Int, tune: com.frederic22.hyperextreme.data.LiquidTune): Params {
         val base = if (mode == com.frederic22.hyperextreme.data.LiquidFlag.MODE_JELLY) JELLY else WATER
@@ -79,36 +91,34 @@ internal object LiquidGlCore {
         )
     }
 
-    /** 水波：高频、中等阻尼、边缘起涟漪。 */
+    /**
+     * 水波默认（2026-11-09 按真机反馈调过一轮）：
+     * 波速降下来、触点放大、阻尼加大、折射减弱 —— 用户反馈「太密、太吵」。
+     */
     val WATER = Params(
-        c2 = 0.18f,
-        damp = 0.992f,
-        level = 0.35f,
-        refract = 4200f,
-        dispersion = 0.10f,
-        specular = 0.22f,
+        c2 = 0.14f,
+        damp = 0.983f,
+        level = 0.25f,
+        refract = 3000f,
+        dispersion = 0.08f,
+        specular = 0.18f,
         jelly = 0f,
     )
 
-    /** 果冻：低频、低阻尼、大尺度整体形变 + 径向挤压。 */
+    /** 果冻：低频、大尺度、回弹慢一点。 */
     val JELLY = Params(
-        c2 = 0.09f,
-        damp = 0.997f,
-        level = 0.55f,
-        refract = 7000f,
-        dispersion = 0.04f,
-        specular = 0.35f,
+        c2 = 0.07f,
+        damp = 0.990f,
+        level = 0.45f,
+        refract = 4800f,
+        dispersion = 0.03f,
+        specular = 0.28f,
         jelly = 1f,
     )
 
     // ───────────────────────────── 着色器 ─────────────────────────────
 
-    /**
-     * 全屏 quad。`vUv` 的 **v=0 在屏幕底部**（标准 GL 方向）。
-     *
-     * sim 纹理与 vUv 同一方向写、同一方向读，所以两边天然一致；
-     * 唯一需要翻的是 base 图（Bitmap 第 0 行是顶部），在 DRAW 里用 `1.0 - uv.y` 处理。
-     */
+    /** 全屏 quad。`vUv` 的 v=0 在屏幕底部（标准 GL 方向）。 */
     const val VERT = """
         attribute vec2 aPos;
         varying vec2 vUv;
@@ -122,41 +132,40 @@ internal object LiquidGlCore {
      * 模拟 pass。
      *
      * * `uPrev` 的 R/G 是上一帧的 h/v（`*2-1` 解码）；
-     * * 重力液面用**软弹簧**把平均水面拉向倾斜平面，而不是直接加到 h 上 ——
-     *   直接加会让「倾斜」和「波动」混在一起，松手后永远回不到平面；
-     * * 选区外 `h`、`v` 一起清零：只清 h 的话速度会把波又推回选区里。
+     * * `uVisc` 是高频抑制，见类注释第 1 条；
+     * * 重力液面用**软弹簧**把平均水面拉向倾斜平面（0.015 的系数，比原来的 0.02 更软，
+     *   倾倒后约 0.8s 稳住，且不会持续给画面供能）；
+     * * 选区 = 一张**屏幕空间**的遮罩纹理（涂抹产物），乘在 h/v 上。
      */
     const val SIM = """
         precision highp float;
         varying vec2 vUv;
 
         uniform sampler2D uPrev;
+        uniform sampler2D uMaskTex;
         uniform vec2  uTexel;
         uniform float uC2;
         uniform float uDamp;
+        uniform float uVisc;
         uniform vec2  uTilt;
         uniform float uLevel;
         uniform float uAspect;
         uniform vec4  uSplat0;
         uniform vec4  uSplat1;
         uniform float uMaskOn;
-        uniform vec2  uMaskCenter;
-        uniform float uMaskRadius;
 
         float dec(float x) { return x * 2.0 - 1.0; }
 
-        // 软椭圆选区（见 LiquidMask）：1 = 全图；椭圆外压到 0（没有液体）。
-        // v 轴乘 aspect 才是屏幕上的正圆 —— 与 splat 的修正同一个理由。
+        // 选区：屏幕空间遮罩（白 = 有液体）。uMaskOn=0 时直接返回 1。
         float maskAt(vec2 uv) {
             if (uMaskOn < 0.5) return 1.0;
-            vec2 d = (uv - uMaskCenter) * vec2(1.0, uAspect) / max(uMaskRadius, 1e-3);
-            return 1.0 - smoothstep(0.82, 1.0, length(d));
+            // Bitmap 第 0 行在顶部 ⇒ 纹理 v=0 是「屏幕上边」，采样要翻 y
+            return texture2D(uMaskTex, vec2(uv.x, 1.0 - uv.y)).r;
         }
 
         // xy = uv, z = 振幅（>0 表示往下压）, w = sigma（以「屏幕宽度」为单位的半径）
         float splat(vec4 s) {
             if (s.z <= 0.0) return 0.0;
-            // uv 两轴的像素跨度不同（竖屏 H≈2.2W），v 轴要乘 aspect 才是屏幕上的正圆
             vec2 d = (vUv - s.xy) * vec2(1.0, uAspect);
             return s.z * exp(-dot(d, d) / max(s.w * s.w, 1e-6));
         }
@@ -175,12 +184,15 @@ internal object LiquidGlCore {
             v = (v + uC2 * lap) * uDamp;
 
             // 液面基准：倾斜时水面保持水平（屏幕上是线性斜面），软弹簧拽过去。
-            // 系数 0.02 是「倾倒后 ~0.5s 稳住」的手感；调大容易和波动方程打架（整幅持续呼吸）。
             float level = (uTilt.x * (vUv.x - 0.5) + uTilt.y * (vUv.y - 0.5)) * uLevel;
-            v += (level - h) * 0.02;
+            v += (level - h) * 0.015;
 
             h += v;
             h -= splat(uSplat0) + splat(uSplat1);
+
+            // 粘度：只压短波（量化噪声就在这个频段），见类注释第 1 条
+            float avg4 = (hl + hr + hu + hd) * 0.25;
+            h = mix(h, avg4, uVisc);
 
             float m = maskAt(vUv);
             h *= m;
@@ -193,13 +205,7 @@ internal object LiquidGlCore {
     """
 
     /**
-     * 合成 pass。
-     *
-     * * 梯度用中心差分，**一个 sim 纹素**为步长，再除回像素口径（`uScreen`）——
-     *   否则竖屏上横向位移会比纵向弱一倍多；步长越大越「橡皮泥」，越小越「玻璃」，
-     *   改步长要连 `refract` 一起调；
-     * * 色散不是简单加饱和：三通道采样位置错开，边缘自然出彩边；
-     * * 高光用梯度当法线（`-gpx, 1`），比单独存一张法线图便宜得多。
+     * 合成 pass。梯度换成「每像素」口径，再乘 `uRefract` 得像素位移。
      */
     const val DRAW = """
         precision mediump float;
@@ -207,12 +213,11 @@ internal object LiquidGlCore {
 
         uniform sampler2D uBase;
         uniform sampler2D uSim;
+        uniform sampler2D uMaskTex;
         uniform vec2  uTexel;
         uniform vec2  uScreen;
         uniform vec2  uImgScale;
         uniform float uMaskOn;
-        uniform vec2  uMaskCenter;
-        uniform float uMaskRadius;
         uniform float uRefract;
         uniform float uDisp;
         uniform float uSpec;
@@ -221,12 +226,10 @@ internal object LiquidGlCore {
 
         float H(vec2 uv) { return texture2D(uSim, uv).r * 2.0 - 1.0; }
 
-        // 与 SIM 里同一套软椭圆选区；这里的 aspect 从 uScreen 现算。
         float maskAt(vec2 uv) {
             if (uMaskOn < 0.5) return 1.0;
-            float aspect = uScreen.y / uScreen.x;
-            vec2 d = (uv - uMaskCenter) * vec2(1.0, aspect) / max(uMaskRadius, 1e-3);
-            return 1.0 - smoothstep(0.82, 1.0, length(d));
+            // Bitmap 第 0 行在顶部 ⇒ 纹理 v=0 是「屏幕上边」，采样要翻 y
+            return texture2D(uMaskTex, vec2(uv.x, 1.0 - uv.y)).r;
         }
 
         void main() {
@@ -289,7 +292,6 @@ internal object LiquidGlCore {
             GLES20.glDeleteProgram(p)
             return 0
         }
-        // shader 挂到 program 上之后就可以删（引用计数在 program 里）
         GLES20.glDeleteShader(v)
         GLES20.glDeleteShader(f)
         return p
@@ -313,10 +315,7 @@ internal object LiquidGlCore {
         return s
     }
 
-    /**
-     * 取一次 glGetError 并打日志。只在启动 / 首帧调用 —— **不要逐帧调**，
-     * `glGetError` 会强制同步管线，等于把 60fps 砍半。
-     */
+    /** 取一次 glGetError 并打日志。只在启动 / 首帧调用，不要逐帧调。 */
     fun checkGl(tag: String) {
         val e = GLES20.glGetError()
         if (e != 0) HookRuntime.log("LIQUID glError $tag=0x${Integer.toHexString(e)}")

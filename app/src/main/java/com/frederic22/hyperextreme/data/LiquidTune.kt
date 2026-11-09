@@ -48,16 +48,16 @@ data class LiquidTune(
     companion object {
 
         /** 水波默认：高频、中等阻尼。 */
-        val WATER = LiquidTune(refract = 4200f, c2 = 0.18f, damp = 0.992f, sigma = 0.055f, level = 0.35f)
+        val WATER = LiquidTune(refract = 3000f, c2 = 0.14f, damp = 0.983f, sigma = 0.085f, level = 0.25f)
 
         /** 果冻默认：低频、低阻尼、大触点。 */
-        val JELLY = LiquidTune(refract = 7000f, c2 = 0.09f, damp = 0.997f, sigma = 0.110f, level = 0.55f)
+        val JELLY = LiquidTune(refract = 4800f, c2 = 0.07f, damp = 0.990f, sigma = 0.140f, level = 0.45f)
 
         /** 预设「柔和」：几乎不扰原图。 */
-        val SOFT = LiquidTune(refract = 2800f, c2 = 0.12f, damp = 0.986f, sigma = 0.075f, level = 0.25f)
+        val SOFT = LiquidTune(refract = 1800f, c2 = 0.10f, damp = 0.975f, sigma = 0.120f, level = 0.15f)
 
         /** 预设「强劲」：形变大、荡得久。 */
-        val STRONG = LiquidTune(refract = 6500f, c2 = 0.22f, damp = 0.996f, sigma = 0.040f, level = 0.50f)
+        val STRONG = LiquidTune(refract = 5200f, c2 = 0.20f, damp = 0.990f, sigma = 0.060f, level = 0.40f)
 
         /** 预设索引：0 柔和 / 1 标准 / 2 强劲。 */
         fun preset(mode: Int, index: Int): LiquidTune = when (index) {
@@ -72,7 +72,7 @@ data class LiquidTune(
             val p = raw.split(',').mapNotNull { it.trim().toFloatOrNull() }
             if (p.size < 5) return null
             return LiquidTune(
-                refract = p[0].coerceIn(1000f, 9000f),
+                refract = p[0].coerceIn(500f, 9000f),
                 c2 = (p[1] / 100f).coerceIn(0.05f, 0.24f),
                 damp = (p[2] / 1000f).coerceIn(0.960f, 0.999f),
                 sigma = (p[3] / 1000f).coerceIn(0.020f, 0.150f),
@@ -83,42 +83,32 @@ data class LiquidTune(
 }
 
 /**
- * 液态壁纸的**选区**（2026-11-09，P3 的「局部」模式）。
+ * 液态壁纸的**选区**（2026-11-09；同日从椭圆参数改成涂抹遮罩）。
  *
- * 目前是**软椭圆**：中心在屏幕垂直方向 [centerY]、半径 [radius]（以屏宽为单位）。
- * 椭圆外高度场被压成 0（没有液体），边界用 smoothstep 羽化 —— 观感是「一滩水停在
- * 画面某处」，比硬边 mask 自然。
+ * `on = true` 时渲染器通过 provider 拉 `liquid/<key>/mask`（页面里全屏涂抹生成，
+ * 白色 = 有液体），按屏幕 uv 采样。
  *
- * 为什么先不做任意涂抹：Shader 里本来就有 mask 通道，接一张涂抹位图只是多一条
- * provider 路由；但「涂抹编辑器」本身是一整页 UI（笔刷 / 撤销 / 预览），
- * 放在参数调节这一版里会把改动面撑得太大。椭圆先让「局部」可用，后续换位图时
- * 只改 `maskAt` 的实现，页面与属性通道不用动。
+ * `stamp` 是「这次涂抹的版本号」（保存时间秒）。渲染器在 SystemUI 进程里看不到
+ * 模块文件，没法比对 mtime，所以由页面把版本号塞进属性：值一变就重新拉一次遮罩。
  */
 data class LiquidMask(
     val on: Boolean,
-    /** 椭圆中心（相对屏幕高度的比例，0 = 顶部，1 = 底部）。 */
-    val centerY: Float,
-    /** 椭圆半径（以屏宽为单位；竖屏上 0.35 约等于半屏宽）。 */
-    val radius: Float,
+    /** 涂抹保存时间戳（秒）。页面每次保存都换一个值，渲染器据此重新拉遮罩。 */
+    val stamp: Int = 0,
 ) {
 
-    fun encode(): String =
-        "${if (on) 1 else 0},${(centerY * 100f).roundToInt()},${(radius * 100f).roundToInt()}"
+    fun encode(): String = "${if (on) 1 else 0},$stamp"
 
     companion object {
 
         /** 全图（关闭选区）。 */
-        val FULL = LiquidMask(on = false, centerY = 0.5f, radius = 0.35f)
+        val FULL = LiquidMask(on = false, stamp = 0)
 
         fun decode(raw: String): LiquidMask? {
             if (raw.isBlank()) return null
             val p = raw.split(',').mapNotNull { it.trim().toIntOrNull() }
-            if (p.size < 3) return null
-            return LiquidMask(
-                on = p[0] == 1,
-                centerY = (p[1] / 100f).coerceIn(0f, 1f),
-                radius = (p[2] / 100f).coerceIn(0.15f, 0.60f),
-            )
+            if (p.isEmpty()) return null
+            return LiquidMask(on = p[0] == 1, stamp = p.getOrElse(1) { 0 })
         }
     }
 }

@@ -95,10 +95,10 @@ class MaskProvider : ContentProvider() {
         if (uri.pathSegments.firstOrNull() == LIQUID_SEGMENT) {
             val key = uri.pathSegments.getOrNull(1).orEmpty()
             val name = uri.pathSegments.getOrNull(2).orEmpty()
-            if (!key.matches(LIQUID_KEY_RE) || name != "base") {
+            if (!key.matches(LIQUID_KEY_RE) || (name != "base" && name != "mask")) {
                 throw FileNotFoundException("非法的液态壁纸路径: $uri")
             }
-            val f = LiquidStore.baseFile(appContext, key)
+            val f = if (name == "mask") LiquidStore.maskFile(appContext, key) else LiquidStore.baseFile(appContext, key)
             if (!f.isFile) throw FileNotFoundException("液态壁纸素材不存在: $uri")
             return ParcelFileDescriptor.open(f, ParcelFileDescriptor.MODE_READ_ONLY)
         }

@@ -87,7 +87,7 @@ internal object LiquidRenderer {
     private const val FRAME_MS = 16L
 
     /** 最后一次输入之后继续出帧多久（波要荡完）。 */
-    private const val IDLE_MS = 3200L
+    private const val IDLE_MS = 6000L
 
     /** 兜底可见性轮询：`KeyguardLockedStateListener` 之外的保险（灭亮屏、异常状态）。 */
     private const val VISIBILITY_MS = 700L
@@ -126,12 +126,12 @@ internal object LiquidRenderer {
     private var simPos = 0
     private var drawPos = 0
     private var sPrev = 0
+    private var sMask = 0
     private var sMaskOn = 0
+    private var sVisc = 0
     private var sTexel = 0
     private var sC2 = 0
     private var sDamp = 0
-    private var sMaskCenter = 0
-    private var sMaskRadius = 0
     private var sTilt = 0
     private var sLevel = 0
     private var sAspect = 0
@@ -139,12 +139,11 @@ internal object LiquidRenderer {
     private var sSplat1 = 0
     private var dBase = 0
     private var dSim = 0
+    private var dMask = 0
     private var dMaskOn = 0
     private var dTexel = 0
     private var dScreen = 0
     private var dImgScale = 0
-    private var dMaskCenter = 0
-    private var dMaskRadius = 0
     private var dRefract = 0
     private var dDisp = 0
     private var dSpec = 0
@@ -154,6 +153,14 @@ internal object LiquidRenderer {
     private var quad: FloatBuffer? = null
 
     private var baseTex = 0
+    private var maskTex = 0
+    private var maskStamp = -1L
+    private var maskLoadedKey = ""
+    private var maskWarned = false
+
+    /** 最后一次「用户输入」的时刻；用于无输入后强制收敛（见 [settleFactor]）。 */
+    @Volatile private var lastInputAt = 0L
+
     // 参数 / 选区（属性热更，见 refreshTune）
     private var tune: LiquidTune = LiquidTune.WATER
     private var maskCfg: LiquidMask = LiquidMask.FULL
@@ -251,6 +258,7 @@ internal object LiquidRenderer {
         maskCfg = LiquidMask.FULL
         tuneRaw = ""
         maskRaw = ""
+        lastInputAt = SystemClock.elapsedRealtime()
         // 属性里可能已经有页面推来的参数（App 启动补推 / 刚拖过滑块）
         refreshTune()
 
@@ -470,12 +478,12 @@ internal object LiquidRenderer {
 
         simPos = GLES20.glGetAttribLocation(simProgram, "aPos")
         sPrev = GLES20.glGetUniformLocation(simProgram, "uPrev")
+        sMask = GLES20.glGetUniformLocation(simProgram, "uMaskTex")
         sMaskOn = GLES20.glGetUniformLocation(simProgram, "uMaskOn")
+        sVisc = GLES20.glGetUniformLocation(simProgram, "uVisc")
         sTexel = GLES20.glGetUniformLocation(simProgram, "uTexel")
         sC2 = GLES20.glGetUniformLocation(simProgram, "uC2")
         sDamp = GLES20.glGetUniformLocation(simProgram, "uDamp")
-        sMaskCenter = GLES20.glGetUniformLocation(simProgram, "uMaskCenter")
-        sMaskRadius = GLES20.glGetUniformLocation(simProgram, "uMaskRadius")
         sTilt = GLES20.glGetUniformLocation(simProgram, "uTilt")
         sLevel = GLES20.glGetUniformLocation(simProgram, "uLevel")
         sAspect = GLES20.glGetUniformLocation(simProgram, "uAspect")
@@ -485,12 +493,11 @@ internal object LiquidRenderer {
         drawPos = GLES20.glGetAttribLocation(drawProgram, "aPos")
         dBase = GLES20.glGetUniformLocation(drawProgram, "uBase")
         dSim = GLES20.glGetUniformLocation(drawProgram, "uSim")
+        dMask = GLES20.glGetUniformLocation(drawProgram, "uMaskTex")
         dMaskOn = GLES20.glGetUniformLocation(drawProgram, "uMaskOn")
         dTexel = GLES20.glGetUniformLocation(drawProgram, "uTexel")
         dScreen = GLES20.glGetUniformLocation(drawProgram, "uScreen")
         dImgScale = GLES20.glGetUniformLocation(drawProgram, "uImgScale")
-        dMaskCenter = GLES20.glGetUniformLocation(drawProgram, "uMaskCenter")
-        dMaskRadius = GLES20.glGetUniformLocation(drawProgram, "uMaskRadius")
         dRefract = GLES20.glGetUniformLocation(drawProgram, "uRefract")
         dDisp = GLES20.glGetUniformLocation(drawProgram, "uDisp")
         dSpec = GLES20.glGetUniformLocation(drawProgram, "uSpec")
@@ -562,6 +569,10 @@ internal object LiquidRenderer {
         simTex[0] = 0; simTex[1] = 0
         simFbo[0] = 0; simFbo[1] = 0
         baseTex = 0
+        if (maskTex != 0) GLES20.glDeleteTextures(1, intArrayOf(maskTex), 0)
+        maskTex = 0
+        maskStamp = -1L
+        maskLoadedKey = ""
         simProgram = 0
         drawProgram = 0
     }
@@ -709,6 +720,7 @@ internal object LiquidRenderer {
             logSwap("makeCurrent", once = swapErrors <= 3)
             return
         }
+        ensureMaskTexture(appContext)
 
         stepSim()
 
@@ -731,6 +743,65 @@ internal object LiquidRenderer {
                 "LIQUID ${what}失败（第 $swapErrors 次）：0x${Integer.toHexString(EGL14.eglGetError())}",
             )
         }
+    }
+
+    /** 选区实际生效 = 开关打开 **且** 遮罩纹理已在。 */
+    private fun maskOn(): Boolean = maskCfg.on && maskTex != 0 && maskLoadedKey == runKey
+
+    /**
+     * 无输入后的强制收敛系数。
+     *
+     * 为什么需要：`damp` 再低也要好几秒才散，而重力弹簧会持续给画面供能 —— 真机反馈
+     * 「水波一直动、不真实」。这里在停止触摸/摇晃 2s 后把阻尼从 1.0 线性压到 0.55，
+     * 画面会在 1~2s 内变成平静水面；新输入立刻回到 1.0。
+     */
+    private fun settleFactor(): Float {
+        val idle = SystemClock.elapsedRealtime() - lastInputAt
+        return when {
+            idle < 2000L -> 1f
+            idle < 5000L -> 1f - (idle - 2000L) / 3000f * 0.45f
+            else -> 0.55f
+        }
+    }
+
+    /**
+     * 选区遮罩纹理：按需从 provider 读 `liquid/<key>/mask`（用户涂抹产物）。
+     *
+     * ⚠️ **不能用 `LiquidStore.maskFile`**：渲染器跑在 SystemUI 进程，`ctx.filesDir`
+     * 是 SystemUI 自己的目录，看不到模块私有文件 —— 只能走 provider 流。
+     * 缓存判据是 **key + 页面递来的时间戳**（`LiquidMask.stamp`），重新涂抹会换 stamp。
+     */
+    private fun ensureMaskTexture(ctx: Context?) {
+        if (ctx == null || !maskCfg.on || runKey.isEmpty()) return
+        if (maskTex != 0 && maskStamp == maskCfg.stamp.toLong() && maskLoadedKey == runKey) return
+        if (maskTex != 0) {
+            GLES20.glDeleteTextures(1, intArrayOf(maskTex), 0)
+            maskTex = 0
+        }
+        val bmp = runCatching {
+            ctx.contentResolver.openInputStream(
+                android.net.Uri.parse(
+                    "content://${com.frederic22.hyperextreme.data.MaskProvider.AUTHORITY}/liquid/$runKey/mask",
+                ),
+            )?.use { BitmapFactory.decodeStream(it) }
+        }.getOrNull()
+        if (bmp == null) {
+            if (!maskWarned) {
+                maskWarned = true
+                HookRuntime.log("LIQUID 选区已开但读不到遮罩（key=$runKey）")
+            }
+            return
+        }
+        val w = bmp.width
+        val h = bmp.height
+        maskTex = newTexture(w, h)
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, maskTex)
+        GLUtils.texImage2D(GLES20.GL_TEXTURE_2D, 0, bmp, 0)
+        bmp.recycle()
+        maskStamp = maskCfg.stamp.toLong()
+        maskLoadedKey = runKey
+        maskWarned = false
+        HookRuntime.log("LIQUID 选区遮罩已加载 ${w}x$h（stamp=${maskCfg.stamp}）")
     }
 
     /**
@@ -768,12 +839,15 @@ internal object LiquidRenderer {
         GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, simTex[simCur])
         GLES20.glUniform1i(sPrev, 0)
 
+        GLES20.glActiveTexture(GLES20.GL_TEXTURE1)
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, maskTex)
+        GLES20.glUniform1i(sMask, 1)
+
         GLES20.glUniform2f(sTexel, 1f / simW, 1f / simH)
         GLES20.glUniform1f(sC2, params.c2)
-        GLES20.glUniform1f(sDamp, params.damp)
-        GLES20.glUniform1f(sMaskOn, if (maskCfg.on) 1f else 0f)
-        GLES20.glUniform2f(sMaskCenter, 0.5f, 1f - maskCfg.centerY)
-        GLES20.glUniform1f(sMaskRadius, maskCfg.radius)
+        GLES20.glUniform1f(sDamp, params.damp * settleFactor())
+        GLES20.glUniform1f(sVisc, LiquidGlCore.VISCOSITY)
+        GLES20.glUniform1f(sMaskOn, if (maskOn()) 1f else 0f)
         GLES20.glUniform2f(sTilt, tiltX, tiltY)
         GLES20.glUniform1f(sLevel, params.level)
         GLES20.glUniform1f(sAspect, screenH.toFloat() / screenW)
@@ -805,12 +879,14 @@ internal object LiquidRenderer {
         GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, simTex[simCur])
         GLES20.glUniform1i(dSim, 1)
 
+        GLES20.glActiveTexture(GLES20.GL_TEXTURE2)
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, maskTex)
+        GLES20.glUniform1i(dMask, 2)
+
         GLES20.glUniform2f(dTexel, 1f / simW, 1f / simH)
         GLES20.glUniform2f(dScreen, screenW.toFloat(), screenH.toFloat())
         GLES20.glUniform2f(dImgScale, imgScale[0], imgScale[1])
-        GLES20.glUniform1f(dMaskOn, if (maskCfg.on) 1f else 0f)
-        GLES20.glUniform2f(dMaskCenter, 0.5f, 1f - maskCfg.centerY)
-        GLES20.glUniform1f(dMaskRadius, maskCfg.radius)
+        GLES20.glUniform1f(dMaskOn, if (maskOn()) 1f else 0f)
         GLES20.glUniform1f(dRefract, params.refract)
         GLES20.glUniform1f(dDisp, params.dispersion)
         GLES20.glUniform1f(dSpec, params.specular)
@@ -847,6 +923,7 @@ internal object LiquidRenderer {
         // 免得分发频率（120~240Hz）把队列灌爆、拖拽变成「一串断开的点」。
         if (now - lastTouchAt < 4) return
         lastTouchAt = now
+        lastInputAt = now
         if (touches.size > 48) touches.clear()
         touches.add(
             floatArrayOf(
@@ -891,10 +968,14 @@ internal object LiquidRenderer {
                 }
                 val nx = (-gx / 4.9f).coerceIn(-1f, 1f)
                 val ny = (gy / 4.9f).coerceIn(-1f, 1f)
-                val moved = abs(nx - tiltX) > 0.004f || abs(ny - tiltY) > 0.004f
+                val moved = abs(nx - tiltX) > 0.012f || abs(ny - tiltY) > 0.012f
                 tiltX = nx
                 tiltY = ny
-                if (moved) requestFrames(900)
+                if (moved) {
+                    // 倾斜也算「用户输入」：否则会被 settle 的 0.55 阻尼压得不跟手
+                    lastInputAt = now
+                    requestFrames(600)
+                }
 
                 val hp = abs(event.values[0] - gx) + abs(event.values[1] - gy) +
                     abs(event.values[2] - gz)
@@ -917,6 +998,7 @@ internal object LiquidRenderer {
     }
 
     private fun splashRandom(amp: Float) {
+        lastInputAt = SystemClock.elapsedRealtime()
         val w = screenW
         val h = screenH
         if (w <= 0 || h <= 0) return

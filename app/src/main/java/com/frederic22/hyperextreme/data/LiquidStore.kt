@@ -88,6 +88,23 @@ object LiquidStore {
         )
     }.getOrNull()
 
+    /** 选区遮罩（屏幕空间 PNG，白 = 有液体），与素材同目录。 */
+    fun maskFile(ctx: Context, key: String): File =
+        File(File(ctx.filesDir, DIR), "$key/mask.png")
+
+    fun hasMask(ctx: Context, key: String): Boolean =
+        key.isNotEmpty() && maskFile(ctx, key).isFile
+
+    /** 保存涂抹出来的选区遮罩。返回是否成功。 */
+    fun saveMask(ctx: Context, key: String, bitmap: Bitmap): Boolean = runCatching {
+        val file = maskFile(ctx, key)
+        file.parentFile?.mkdirs()
+        java.io.FileOutputStream(file).use { out ->
+            bitmap.compress(Bitmap.CompressFormat.PNG, 100, out)
+        }
+        true
+    }.getOrDefault(false)
+
     /** 删掉一张素材（用户换图后旧图最多留 2 份，见页面里的清理策略）。 */
     fun delete(ctx: Context, key: String) {
         if (key.isEmpty()) return
