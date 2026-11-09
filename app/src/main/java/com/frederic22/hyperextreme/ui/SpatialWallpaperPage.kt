@@ -103,7 +103,8 @@ internal fun SpatialWallpaperDetail(state: MaskUiState) {
     var showConflict by remember { mutableStateOf(false) }
     var conflictOther by remember { mutableStateOf<RunningWallpaper?>(null) }
 
-    // 「缓存推理分辨率」：推理短边档位（768 / 896 / 1024），存在 MaskPrefs 里跨页面保留。
+    // 「缓存推理分辨率」：推理短边档位（768 / 896 / 1024 / 1152 / 1280，高两档按内存过滤），
+    // 存在 MaskPrefs 里跨页面保留。
     val prefs = remember { MaskPrefs(ctx) }
 
     // ───────────── 候选卡片流（2026-11-04，取代原来的"1:1 预览 + 选择/更换/清空"）─────────────
@@ -123,7 +124,10 @@ internal fun SpatialWallpaperDetail(state: MaskUiState) {
     var shiftFromPage by remember { mutableIntStateOf(-1) }
     var shiftToken by remember { mutableIntStateOf(0) }
 
-    var shortSide by remember { mutableStateOf(prefs.spatialShortSide) }
+    // 本机可用的档位（低内存机不出现 1152 / 1280；见 SpatialDepth.shortSidesFor）。
+    val shortOptions = remember { SpatialDepth.shortSidesFor(ctx) }
+    // 存量值不在本机档位里（旧数据 / 换机）时退到本机最高档，避免下拉栏选中项对不上。
+    var shortSide by remember { mutableStateOf(prefs.spatialShortSide.takeIf { shortOptions.contains(it) } ?: shortOptions.last()) }
     // 「空间壁纸生效范围」：0 锁屏（默认）/ 1 桌面 / 2 全局。**不影响层图生成**，只决定渲染器挂哪条 leash。
     var scopeChoice by remember { mutableStateOf(prefs.spatialScope) }
     // 「启用空间壁纸锁屏景深」（2026-10-29）：默认关；关时渲染逻辑与加它之前完全一致。
@@ -793,10 +797,10 @@ internal fun SpatialWallpaperDetail(state: MaskUiState) {
             DropdownRow(
                 title = "缓存推理分辨率",
                 summary = "数值越大，效果越好，速度越慢",
-                options = SpatialDepth.SHORT_SIDES.map { it.toString() },
-                selectedIndex = SpatialDepth.SHORT_SIDES.indexOf(shortSide).coerceAtLeast(0),
+                options = shortOptions.map { it.toString() },
+                selectedIndex = shortOptions.indexOf(shortSide).coerceAtLeast(0),
                 onSelect = { index ->
-                    val value = SpatialDepth.SHORT_SIDES[index]
+                    val value = shortOptions[index]
                     shortSide = value
                     prefs.setSpatialShortSide(value)
                 },

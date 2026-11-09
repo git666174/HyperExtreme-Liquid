@@ -84,11 +84,18 @@ import top.yukonga.miuix.kmp.squircle.squircleClip
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import top.yukonga.miuix.kmp.window.WindowBottomSheet
 
-/** 一个光栅组最多几张（用户 2026-11-03 定：2~4 张，下限 2 是产品目标，导入阶段允许 1 张）。 */
+/** 一个光栅组最多几张（用户 2026-11-03 定：最多 4 张）。 */
 private const val MAX_ITEMS = 4
 
-/** 提交下限：不到 2 张不许点 ✓（新建、编辑同一套判定）。 */
-private const val MIN_ITEMS = 2
+/**
+ * 提交下限：不足 [MIN_ITEMS] 张不许点 ✓（新建、编辑同一套判定）。
+ *
+ * 2026-11-09 由 2 放开到 1（用户要求「去掉至少两张的限制」）：
+ * 单张也能成组 —— 此时没有「左右倾斜换图」的擦除过渡，但液态着色器仍靠
+ * `uTime` / `uPan` 持续流动、晃动手机有推浪，观感是「单图液态壁纸」。
+ * **0 张仍然拦住**：空组既没意义，也没有缓存目录可建。
+ */
+private const val MIN_ITEMS = 1
 
 /**
  * 槽位尺寸 = 卡片流**中间态卡片**的 80%（用户 2026-11-04 定）。
@@ -505,11 +512,11 @@ internal fun RasterGroupSheet(
         endAction = {
             IconButton(onClick = {
                 haptic()
-                // 产品目标是 2~4 张（用户 2026-11-03）：不到两张不许提交。
-                // **新建和编辑走同一条判定** —— 编辑时删到只剩 1 张（或删空）也一样拦住，
+                // 2026-11-09 起下限放开到 1 张（用户要求）：单张也能提交，走「单图液态」形态。
+                // **新建和编辑走同一条判定** —— 编辑时删空也一样拦住，
                 // 不会顺手把整组删掉（用户 2026-11-04 要求）。
                 if (names.size < MIN_ITEMS) {
-                    AppToast.show(ctx, "至少选择两张壁纸")
+                    AppToast.show(ctx, "至少选择一张壁纸")
                 } else {
                     finish()
                 }

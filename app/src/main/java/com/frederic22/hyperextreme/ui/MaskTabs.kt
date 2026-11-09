@@ -235,7 +235,7 @@ internal fun FunctionHome(onOpen: (DetailPage) -> Unit) {
             title = "空间壁纸",
             onClick = { onOpen(DetailPage.SpatialWallpaper) },
         )
-        // 「光栅壁纸」（2026-11-03）：转动手机在 2~4 张图之间渐变过渡 + 主体景深。
+        // 「光栅壁纸」（2026-11-03）：转动手机在 1~4 张图之间渐变过渡 + 主体景深（单张走液态）。
         // 渲染层计划复用空间壁纸那套 GL；图标/包名与空间壁纸保持一致（同样是壁纸层的事）。
         // 当前二级页只是**主体验证**（系统 AI 能不能给遮罩），还不是完整功能。
         AppEntryCard(

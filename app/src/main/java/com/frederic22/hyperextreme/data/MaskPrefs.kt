@@ -48,8 +48,8 @@ class MaskPrefs(context: Context) {
      * 空间壁纸「缓存推理分辨率」（推理短边，像素），默认 [SPATIAL_SHORT_DEFAULT]。
      *
      * **只影响 `files/spatial/` 的深度图生成**，与视差链没有任何关系。
-     * 合法档位见 `spatial/SpatialDepth.SHORT_SIDES`（768 / 896 / 1024）——
-     * 数值越大深度图越细，但推理越慢（768 ≈ 5.3s，1024 ≈ 9.3s，10 秒是硬上限）。
+     * 合法档位见 `spatial/SpatialDepth.SHORT_SIDES`（768 / 896 / 1024 / 1152 / 1280）——
+     * 数值越大深度图越细，但推理越慢、内存越高（768 ≈ 5.3s，1024 ≈ 9.3s，1152 ≈ 15s，1280 ≈ 22s）。
      * 读到的值不在合法档位里时按默认值处理，避免旧数据把界面搞崩。
      */
     val spatialShortSide: Int
@@ -1047,7 +1047,7 @@ class MaskPrefs(context: Context) {
         /** 空间壁纸推理短边默认值（合法档位与 `SpatialDepth.SHORT_SIDES` 保持一致）。 */
         const val SPATIAL_SHORT_DEFAULT = 768
         /** 合法档位白名单 —— 读到意外的值就回默认，避免下拉栏 index 越界。 */
-        private val SPATIAL_SHORT_CHOICES = intArrayOf(768, 896, 1024)
+        private val SPATIAL_SHORT_CHOICES = intArrayOf(768, 896, 1024, 1152, 1280)
         /** 用户是否确认过「替换时屏幕会自动灭亮一次」（确认过就不再提示）。 */
         /** 「替换后自动灭亮屏一次」（替换行为里的开关，默认关）。 */
         const val KEY_AUTO_SCREEN_FLASH = "auto_screen_flash"

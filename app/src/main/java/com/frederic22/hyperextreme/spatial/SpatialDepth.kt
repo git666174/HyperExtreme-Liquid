@@ -4,6 +4,7 @@ import ai.onnxruntime.OnnxTensor
 import ai.onnxruntime.OrtEnvironment
 import ai.onnxruntime.OrtSession
 import ai.onnxruntime.TensorInfo
+import android.app.ActivityManager
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -35,8 +36,8 @@ import kotlin.math.roundToInt
  *
  * ## 定死的参数（见《04-功能设计存档.md》需求四）
  *
- * * 推理短边从 `SHORT_SIDES = [768, 896, 1024]` 里选，**默认 768**（518 边界毛糙有断线、
- *   1024 真机约 16s）；对齐到 14 的倍数（768 → 756）；
+ * * 推理短边从 `SHORT_SIDES = [768, 896, 1024, 1152, 1280]` 里选，**默认 768**（518 边界毛糙有断线）；
+ *   对齐到 14 的倍数（768 → 756）。高两档是否出现由 `shortSidesFor()` 按物理内存过滤；
  * * **输出尺寸 = 所选档位对齐后的尺寸，不再放大到长边 1920** —— 深度是低频图，
  *   放大会插值出假细节（2026-10-22 用户定案「短边就是所选值」）；
  * * 单张 **10 秒内**，超时/质量不达标 = 直接失败，**不做 2 层降级**。
@@ -67,9 +68,34 @@ internal object SpatialDepth {
      * 可选档位（推理短边，像素）。**必须与 `MaskPrefs.SPATIAL_SHORT_CHOICES` 一致**。
      *
      * 下限 768：518 那档发丝会断线、低于训练尺寸 518 更没意义；
-     * 上限 1024：像素量约 180 万，真机 ~9.3s，**再高一档就破 10 秒**（1152 ≈ 11.8s）。
+     * 1024（像素量约 180 万，真机 ~9.3s）是**稳妥档**；1152 / 1280 是 2026-11-09 按用户要求
+     * 新增的「更高档」，像素量分别是 1024 的 ~1.6 / ~2.4 倍，耗时约 15s / 22s，**峰值内存也按同一
+     * 比例涨**，所以低内存机不展示，见 [shortSidesFor]。
      */
-    val SHORT_SIDES = intArrayOf(768, 896, 1024)
+    val SHORT_SIDES = intArrayOf(768, 896, 1024, 1152, 1280)
+
+    /**
+     * 这台机器**实际可用**的档位：低内存机隐藏 1152 / 1280，防止推理时 OOM。
+     *
+     * 判据用 `MemoryInfo.totalMem`（物理内存）而不是堆上限 —— 深度推理的峰值主要在
+     * bitmap / ORT 的 native 临时缓冲里，物理内存更能反映余量。阈值按真机常见规格取整：
+     *
+     * * `>= 11 GB`（12G / 16G 机型实测 11.x GB）：768 / 896 / 1024 / 1152 / 1280
+     * * `>= 7 GB`（8G 机型）：768 / 896 / 1024 / 1152
+     * * 其余：768 / 896 / 1024
+     */
+    fun shortSidesFor(ctx: Context): IntArray {
+        val am = ctx.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
+            ?: return intArrayOf(768, 896, 1024)
+        val info = ActivityManager.MemoryInfo()
+        runCatching { am.getMemoryInfo(info) }
+        val gb = info.totalMem.toDouble() / (1024.0 * 1024.0 * 1024.0)
+        return when {
+            gb >= 11.0 -> intArrayOf(768, 896, 1024, 1152, 1280)
+            gb >= 7.0 -> intArrayOf(768, 896, 1024, 1152)
+            else -> intArrayOf(768, 896, 1024)
+        }
+    }
 
     /** ViT 的 patch 尺寸：宽高必须是它的整数倍。 */
     private const val MULT = 14
@@ -290,8 +316,15 @@ internal object SpatialDepth {
         // 原图副本：缓存命中也补写一次（旧缓存只有 preview.webp，用户要求换成原图）
         ensureSource(ctx, uri, dir)
         if (!force && depthFile.isFile && metaFile.isFile) {
-            Log.i(TAG, "缓存命中 $key")
-            return Result(dir, 0L, true)
+            // 命中条件里必须核对**档位**：meta.json 记着生成时用的 shortSide，
+            // 换了「缓存推理分辨率」再应用同一张图，得按新档位重算，否则用户会以为新档位没生效。
+            val cachedShort = runCatching { JSONObject(metaFile.readText()).optInt("shortSide", -1) }
+                .getOrDefault(-1)
+            if (cachedShort == target) {
+                Log.i(TAG, "缓存命中 $key（短边 $target）")
+                return Result(dir, 0L, true)
+            }
+            Log.i(TAG, "缓存档位不符（缓存 $cachedShort ≠ 当前 $target），重算 $key")
         }
 
         val t0 = SystemClock.elapsedRealtime()
