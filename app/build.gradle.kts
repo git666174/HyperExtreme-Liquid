@@ -30,7 +30,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.frederic22.hyperextreme"
+        applicationId = "com.frederic22.hyperextreme.liquid"
         minSdk = 33
         targetSdk = 37
         versionCode = 5

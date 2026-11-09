@@ -54,7 +54,7 @@ import kotlin.math.roundToInt
  */
 internal object RasterOverlay {
 
-    private const val AUTHORITY = "com.frederic22.hyperextreme.provider"
+    private const val AUTHORITY = "com.frederic22.hyperextreme.liquid.provider"
 
     /** 系统的前景层（`res/layout/keyguard_panel_view.xml` 第 3 个子层）。 */
     private const val ID_FOREGROUND_LAYER = "keyguard_foreground_layer"

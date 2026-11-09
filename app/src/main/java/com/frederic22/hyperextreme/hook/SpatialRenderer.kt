@@ -54,7 +54,7 @@ import java.nio.FloatBuffer
  */
 internal object SpatialRenderer {
 
-    private const val AUTHORITY = "com.frederic22.hyperextreme.provider"
+    private const val AUTHORITY = "com.frederic22.hyperextreme.liquid.provider"
 
     /**
      * 挂哪条壁纸 leash —— `true` = 锁屏壁纸，`false` = 桌面壁纸。

@@ -102,7 +102,7 @@
         -->
         <provider
             android:name=".data.MaskProvider"
-            android:authorities="com.frederic22.hyperextreme.provider"
+            android:authorities="com.frederic22.hyperextreme.liquid.provider"
             android:exported="true"
             android:grantUriPermissions="true" />
 
@@ -112,7 +112,7 @@
         -->
         <provider
             android:name="io.github.libxposed.service.XposedProvider"
-            android:authorities="com.frederic22.hyperextreme.XposedService"
+            android:authorities="com.frederic22.hyperextreme.liquid.XposedService"
             android:exported="true" />
 
         <!--

@@ -55,7 +55,7 @@ class XposedProvider : ContentProvider() {
     companion object {
         const val METHOD_SEND_BINDER = "SendBinder"
         const val KEY_BINDER = "binder"
-        const val AUTHORITY = "com.frederic22.hyperextreme.XposedService"
+        const val AUTHORITY = "com.frederic22.hyperextreme.liquid.XposedService"
 
         @Volatile
         private var frameworkBinder: IBinder? = null

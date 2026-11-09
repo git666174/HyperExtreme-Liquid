@@ -447,7 +447,7 @@ class MaskProvider : ContentProvider() {
     }
 
     companion object {
-        const val AUTHORITY = "com.frederic22.hyperextreme.provider"
+        const val AUTHORITY = "com.frederic22.hyperextreme.liquid.provider"
         const val METHOD_CONFIG = "config"
         /** 只读「解除景深遮挡限制」开关（零副作用，见 [call]）。 */
         const val METHOD_DEPTH = "depth"
