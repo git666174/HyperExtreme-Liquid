@@ -223,6 +223,9 @@ internal object LiquidRenderer {
      * 所以亮屏时清空高度场/果冻位移，再画一帧干净的。
      */
     @Volatile private var needSimReset = false
+
+    /** 重置必须在「壁纸可见」的帧上做；这个截止时间保证帧不会在重置前停掉。 */
+    @Volatile private var resetUntil = 0L
     private var screenReceiver: BroadcastReceiver? = null
     @Volatile private var shakeEnergy = 0f
 
@@ -730,7 +733,9 @@ internal object LiquidRenderer {
             frameScheduled = false
             if (!running) return
             drawFrame(force = false)
-            if (running && SystemClock.elapsedRealtime() < activeUntil) schedule()
+            val now = SystemClock.elapsedRealtime()
+            // 重置还没落地（壁纸一直不可见）时继续尝试，但不能无限跑
+            if (running && (now < activeUntil || (needSimReset && now < resetUntil))) schedule()
         }
     }
 
@@ -812,6 +817,7 @@ internal object LiquidRenderer {
         if (needBaseReload) reloadBase()
         if (needSimReset) {
             needSimReset = false
+            resetUntil = 0L
             resetSimulation()
         }
 
@@ -868,7 +874,7 @@ internal object LiquidRenderer {
             requestFrames(1600)
         }, 180L)
         requestFrames(2200)
-        HookRuntime.log("LIQUID 亮屏：仿真状态已重置，播放一次涟漪")
+        HookRuntime.log("LIQUID 亮屏：仿真状态已重置（mode=$runMode），播放一次涟漪")
     }
 
     /** 选区实际生效 = 开关打开 **且** 遮罩纹理已在。 */
@@ -1265,6 +1271,10 @@ internal object LiquidRenderer {
                         // 只置标记，不清空基准：清空会走「首次」分支、tilt 直接归零（跳变）
                         needTiltBaseline = true
                         needSimReset = true
+                        resetUntil = SystemClock.elapsedRealtime() + 8000L
+                        // 果冻是 CPU 状态：不依赖 GL 上下文，亮屏立刻清回静止位，
+                        // 避免"还没等到可见帧、旧形变先被看到"
+                        jelly.reset()
                         // 灭屏时如果有帧回调挂起，Choreographer 恢复后可能不补发 ⇒ 死锁在
                         // frameScheduled=true，schedule() 永远不再投帧。这里强制解锁。
                         frameScheduled = false
@@ -1335,7 +1345,13 @@ internal object LiquidRenderer {
             if (locked) {
                 // 同上：走平滑归零，不直接清空
                 needTiltBaseline = true
-                requestFrames(1800)
+                // 锁屏真正出现时再补一次重置（亮屏瞬间画面可能还不可见，那次会被跳过）
+                needSimReset = true
+                resetUntil = SystemClock.elapsedRealtime() + 8000L
+                handler?.post {
+                    drawFrame(force = false)
+                    requestFrames(1800)
+                }
             } else {
                 activeUntil = 0L
             }
