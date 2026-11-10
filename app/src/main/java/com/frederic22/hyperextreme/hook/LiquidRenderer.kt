@@ -213,6 +213,16 @@ internal object LiquidRenderer {
     @Volatile private var baseGx = Float.NaN
     @Volatile private var baseGy = Float.NaN
     @Volatile private var needTiltBaseline = true
+    /** 基准平滑归零的截止时刻（传感器线程读写）。 */
+    private var baselineRampUntil = 0L
+
+    /**
+     * 亮屏后是否要把仿真状态**重置成平静水面**再画。
+     *
+     * 灭屏前如果正好停在中途，残留的波形会冻在最后一帧；用户要求「每次打开屏幕都重新渲染」，
+     * 所以亮屏时清空高度场/果冻位移，再画一帧干净的。
+     */
+    @Volatile private var needSimReset = false
     private var screenReceiver: BroadcastReceiver? = null
     @Volatile private var shakeEnergy = 0f
 
@@ -800,6 +810,10 @@ internal object LiquidRenderer {
         }
         ensureMaskTexture(appContext)
         if (needBaseReload) reloadBase()
+        if (needSimReset) {
+            needSimReset = false
+            resetSimulation()
+        }
 
         stepSim()
 
@@ -822,6 +836,39 @@ internal object LiquidRenderer {
                 "LIQUID ${what}失败（第 $swapErrors 次）：0x${Integer.toHexString(EGL14.eglGetError())}",
             )
         }
+    }
+
+    /**
+     * 重置仿真状态：水波高度场清回 0.5（平静水面），果冻网格回到静止位置。
+     *
+     * **必须在 GL 上下文 current 时调用**（drawFrame 里 makeCurrent 之后）。
+     * 顺带清掉待处理触点，避免亮屏瞬间被灭屏前的旧触点「补一脚」。
+     */
+    private fun resetSimulation() {
+        touches.clear()
+        for (i in 0..1) {
+            if (simFbo[i] == 0) continue
+            GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, simFbo[i])
+            GLES20.glViewport(0, 0, simW, simH)
+            GLES20.glClearColor(0.5f, 0.5f, 0f, 1f)
+            GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
+        }
+        GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0)
+        jelly.reset()
+
+        // 亮屏动画：重置之后在画面中心丢一个涟漪，让「液态」活一下。
+        // 第一次给一个略强的，180ms 后补一个小的是为了有「滴落 → 回弹」的两段感。
+        // 亮屏动画期间不能处在「收敛」状态，否则 0.9/帧的衰减会把它当场吃掉
+        lastInputAt = SystemClock.elapsedRealtime()
+        touches.add(floatArrayOf(0.5f, 0.52f, 0.38f))
+        handler?.postDelayed({
+            if (!running) return@postDelayed
+            lastInputAt = SystemClock.elapsedRealtime()
+            touches.add(floatArrayOf(0.5f, 0.52f, 0.20f))
+            requestFrames(1600)
+        }, 180L)
+        requestFrames(2200)
+        HookRuntime.log("LIQUID 亮屏：仿真状态已重置，播放一次涟漪")
     }
 
     /** 选区实际生效 = 开关打开 **且** 遮罩纹理已在。 */
@@ -1140,15 +1187,30 @@ internal object LiquidRenderer {
                 gx += (event.values[0] - gx) * a
                 gy += (event.values[1] - gy) * a
                 gz += (event.values[2] - gz) * a
-                // 基准 = 亮屏/进锁屏那一刻的姿态：不管手机怎么拿着，水面先保持水平；
-                // 之后只对「相对基准的变化」做倾斜响应。
+                // 基准重设：**不能直接把 tilt 清零** —— 亮屏瞬间水面会「啪」地跳一下，
+                // 看起来就像整幅重新渲染。这里先让基准保持「当前倾角不变」的取值，
+                // 再用 600ms 把基准追到当前重力，倾角平滑归零。
                 if (needTiltBaseline || baseGx.isNaN() || baseGy.isNaN()) {
-                    baseGx = gx
-                    baseGy = gy
                     needTiltBaseline = false
-                    tiltX = 0f
-                    tiltY = 0f
+                    if (baseGx.isNaN() || baseGy.isNaN()) {
+                        // 首次（渲染器刚启动）：没有旧姿态可保持，直接以当前为基准
+                        baseGx = gx
+                        baseGy = gy
+                        tiltX = 0f
+                        tiltY = 0f
+                    } else {
+                        // 连续：b = g + 4.9·tilt  ⇒ 当前 tilt 保持不变
+                        baseGx = gx + 4.9f * tiltX
+                        baseGy = gy - 4.9f * tiltY
+                        baselineRampUntil = now + 600L
+                        HookRuntime.log("LIQUID 亮屏基准重设：平滑归零（600ms）")
+                    }
                     return
+                }
+                if (now < baselineRampUntil) {
+                    // 每帧（传感器 ~50Hz）把基准往当前重力靠一点 ⇒ tilt 指数衰减到 0
+                    baseGx += (gx - baseGx) * 0.12f
+                    baseGy += (gy - baseGy) * 0.12f
                 }
                 val nx = (-(gx - baseGx) / 4.9f).coerceIn(-1f, 1f)
                 val ny = ((gy - baseGy) / 4.9f).coerceIn(-1f, 1f)
@@ -1200,13 +1262,24 @@ internal object LiquidRenderer {
             override fun onReceive(c: Context?, i: Intent?) {
                 when (i?.action) {
                     Intent.ACTION_SCREEN_ON -> handler?.post {
+                        // 只置标记，不清空基准：清空会走「首次」分支、tilt 直接归零（跳变）
                         needTiltBaseline = true
-                        baseGx = Float.NaN
-                        baseGy = Float.NaN
+                        needSimReset = true
+                        // 灭屏时如果有帧回调挂起，Choreographer 恢复后可能不补发 ⇒ 死锁在
+                        // frameScheduled=true，schedule() 永远不再投帧。这里强制解锁。
+                        frameScheduled = false
                         restartSensor(c ?: ctx)
-                        requestFrames(1500)
+                        // 立刻补一帧：灭屏期间系统可能回收了隐藏层的 buffer，
+                        // 等 vsync 再画会先看到一帧旧内容/黑帧
+                        drawFrame(force = false)
+                        requestFrames(2000)
                     }
-                    Intent.ACTION_SCREEN_OFF -> handler?.post { stopSensor() }
+                    Intent.ACTION_SCREEN_OFF -> handler?.post {
+                        stopSensor()
+                        // 灭屏时撤掉挂起的帧回调，亮屏重新开始，避免"卡住不画"
+                        runCatching { choreographer?.removeFrameCallback(frameCallback) }
+                        frameScheduled = false
+                    }
                 }
             }
         }
@@ -1260,9 +1333,8 @@ internal object LiquidRenderer {
         val l = KeyguardManager.KeyguardLockedStateListener { locked ->
             // 解锁瞬间立刻停帧：下一次 swap 之前就不会再进 drawFrame（缩小阻塞窗口）
             if (locked) {
+                // 同上：走平滑归零，不直接清空
                 needTiltBaseline = true
-                baseGx = Float.NaN
-                baseGy = Float.NaN
                 requestFrames(1800)
             } else {
                 activeUntil = 0L
