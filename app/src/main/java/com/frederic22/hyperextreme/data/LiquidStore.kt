@@ -105,6 +105,36 @@ object LiquidStore {
         true
     }.getOrDefault(false)
 
+    /**
+     * 系统当前壁纸的预览位图（页面实时预览用，≤ [maxWidth]）。
+     *
+     * 优先读 `WallpaperSource.displayPaths` 指向的已应用壁纸文件（和渲染器同源），
+     * 读不到再退 `WallpaperManager`。**必须在 IO 线程调用**。
+     */
+    fun systemPreview(ctx: Context, maxWidth: Int = 720): Bitmap? = runCatching {
+        val uid = WallpaperSource.currentUserId()
+        for (path in WallpaperSource.displayPaths(uid)) {
+            val f = java.io.File(path)
+            if (!f.isFile || f.length() < 50_000L) continue
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeFile(path, bounds)
+            var sample = 1
+            while (bounds.outWidth / sample > maxWidth * 2) sample *= 2
+            val bmp = BitmapFactory.decodeFile(
+                path,
+                BitmapFactory.Options().apply { inSampleSize = sample },
+            )
+            if (bmp != null) return bmp
+        }
+        val drawable = android.app.WallpaperManager.getInstance(ctx).drawable ?: return null
+        val w = drawable.intrinsicWidth.takeIf { it > 0 } ?: maxWidth
+        val h = drawable.intrinsicHeight.takeIf { it > 0 } ?: (maxWidth * 16 / 9)
+        Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888).also {
+            drawable.setBounds(0, 0, w, h)
+            drawable.draw(android.graphics.Canvas(it))
+        }
+    }.getOrNull()
+
     /** 删掉一张素材（用户换图后旧图最多留 2 份，见页面里的清理策略）。 */
     fun delete(ctx: Context, key: String) {
         if (key.isEmpty()) return

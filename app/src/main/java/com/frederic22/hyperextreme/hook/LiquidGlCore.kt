@@ -243,7 +243,7 @@ internal object LiquidGlCore {
 
         void main() {
             // 差分核宽度随「平滑度」走：2~4 纹素。越宽 = 越低通，杂波越少。
-            vec2 o = uTexel * (2.0 + uSmooth * 2.0);
+            vec2 o = uTexel * (2.0 + uSmooth * 4.0);
             float hl = H(vUv - vec2(o.x, 0.0));
             float hr = H(vUv + vec2(o.x, 0.0));
             float hu = H(vUv - vec2(0.0, o.y));
@@ -257,6 +257,8 @@ internal object LiquidGlCore {
             );
 
             float m = maskAt(vUv);
+            // 果冻的位移场（这里解包一次，后面位移与高光共用）
+            vec2 dispPacked = texture2D(uDispTex, vUv).rg * 255.0;
 
             // 屏幕空间位移：
             //   水波 = 高度梯度（光学折射，带色散）；
@@ -264,11 +266,12 @@ internal object LiquidGlCore {
             vec2 s = vUv;
             vec2 d = vec2(0.0);
             if (uJelly > 0.5) {
-                vec2 e = texture2D(uDispTex, vUv).rg * 255.0;
                 // uRefract 在果冻模式里复用为「形变幅度」（页面滑块直接生效）
-                s -= (e - 128.0) / 2048.0 * (uRefract / 3000.0) * m;
+                s -= (dispPacked - 128.0) / 2048.0 * (uRefract / 3000.0) * m;
             } else {
-                d = gpx * uRefract / uScreen * m;
+                // 平滑度越高，折射越收敛（避免把背景的颗粒扯碎）
+                float amp = uRefract * (1.0 - 0.55 * uSmooth);
+                d = gpx * amp / uScreen * m;
                 s += d;
             }
 
@@ -279,6 +282,12 @@ internal object LiquidGlCore {
             vec3 col;
             if (uJelly > 0.5) {
                 col = texture2D(uBase, uv).rgb;
+                // 伪法线高光：把位移方向当倾斜，给果冻一层「湿润」的高光。
+                // 位移场是 24×53 的平滑场，取中心值即可，不需要额外采样。
+                vec2 hd = (dispPacked - 128.0) / 128.0;
+                vec3 n = normalize(vec3(-hd * 1.2, 1.0));
+                float hs = pow(max(dot(n, normalize(uLight)), 0.0), 20.0) * 0.30;
+                col += vec3(hs);
             } else {
                 // 质感分级：柔和只留位移；自然加高光与色散；真实再加菲涅尔
                 float dispOn = step(1.0, uFx);

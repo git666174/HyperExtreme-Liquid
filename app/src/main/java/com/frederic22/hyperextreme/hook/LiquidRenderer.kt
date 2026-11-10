@@ -2,7 +2,10 @@ package com.frederic22.hyperextreme.hook
 
 import android.app.KeyguardManager
 import android.app.WallpaperManager
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
@@ -17,6 +20,7 @@ import android.os.Handler
 import android.os.HandlerThread
 import android.os.PowerManager
 import android.os.SystemClock
+import android.view.Choreographer
 import android.view.Surface
 import com.frederic22.hyperextreme.data.LiquidFlag
 import com.frederic22.hyperextreme.data.LiquidMask
@@ -87,7 +91,7 @@ internal object LiquidRenderer {
     private const val FRAME_MS = 16L
 
     /** 最后一次输入之后继续出帧多久（波要荡完）。 */
-    private const val IDLE_MS = 6000L
+    private const val IDLE_MS = 3500L
 
     /** 兜底可见性轮询：`KeyguardLockedStateListener` 之外的保险（灭亮屏、异常状态）。 */
     private const val VISIBILITY_MS = 700L
@@ -167,6 +171,9 @@ internal object LiquidRenderer {
     private var maskStamp = -1L
     private var maskLoadedKey = ""
     private var maskWarned = false
+    /** 系统壁纸的指纹（候选文件 mtime 最大值）；变了就重载 base。 */
+    private var baseStamp = 0L
+    private var needBaseReload = false
 
     /** 最后一次「用户输入」的时刻；用于无输入后强制收敛（见 [settleFactor]）。 */
     @Volatile private var lastInputAt = 0L
@@ -191,6 +198,7 @@ internal object LiquidRenderer {
 
     // 计时 / 调度
     @Volatile private var frameScheduled = false
+    private var choreographer: Choreographer? = null
 
     @Volatile private var activeUntil = 0L
     @Volatile private var lastTouchAt = 0L
@@ -201,6 +209,11 @@ internal object LiquidRenderer {
 
     @Volatile private var tiltX = 0f
     @Volatile private var tiltY = 0f
+    /** 重力基准（亮屏/进锁屏那一刻的读数）；tilt = (current - baseline)。 */
+    @Volatile private var baseGx = Float.NaN
+    @Volatile private var baseGy = Float.NaN
+    @Volatile private var needTiltBaseline = true
+    private var screenReceiver: BroadcastReceiver? = null
     @Volatile private var shakeEnergy = 0f
 
     // 锁屏状态
@@ -283,6 +296,10 @@ internal object LiquidRenderer {
         tuneRaw = ""
         maskRaw = ""
         lastInputAt = SystemClock.elapsedRealtime()
+        needTiltBaseline = true
+        baseGx = Float.NaN
+        baseGy = Float.NaN
+        baseStamp = wallpaperStamp(ctx)
         // 属性里可能已经有页面推来的参数（App 启动补推 / 刚拖过滑块）
         refreshTune()
 
@@ -439,7 +456,9 @@ internal object LiquidRenderer {
         activeUntil = 0L
         frameScheduled = false
         handler?.removeCallbacksAndMessages(null)
+        runCatching { choreographer?.removeFrameCallback(frameCallback) }
         stopSensor()
+        stopScreenWatch(appContext)
         removeKeyguardListener()
 
         val d = display
@@ -543,9 +562,9 @@ internal object LiquidRenderer {
 
         // 质感档位决定仿真网格宽度：柔和 160 / 自然 224 / 真实 288（渲染始终是屏幕分辨率）
         simW = when (quality) {
-            LiquidFlag.QUALITY_SOFT -> 160
+            LiquidFlag.QUALITY_SOFT -> 144
             LiquidFlag.QUALITY_REAL -> 288
-            else -> 224
+            else -> 192
         }
         simH = max(2, (simW.toFloat() * screenH / screenW).toInt())
         for (i in 0..1) {
@@ -690,8 +709,14 @@ internal object LiquidRenderer {
 
     // ─────────────────────────── 每帧 ───────────────────────────
 
-    private val frameTick = object : Runnable {
-        override fun run() {
+    /**
+     * 帧回调：优先用 [Choreographer] 跟 vsync（120Hz 屏就是 120fps，且不抖）。
+     *
+     * 触摸/传感器线程也会调 [schedule]，而 Choreographer 是线程绑定的，
+     * 所以统一 post 到 GL 线程再投帧。
+     */
+    private val frameCallback = object : Choreographer.FrameCallback {
+        override fun doFrame(frameTimeNanos: Long) {
             frameScheduled = false
             if (!running) return
             drawFrame(force = false)
@@ -723,7 +748,20 @@ internal object LiquidRenderer {
         if (!running || frameScheduled) return
         val h = handler ?: return
         frameScheduled = true
-        h.postDelayed(frameTick, FRAME_MS)
+        h.post {
+            if (!running) {
+                frameScheduled = false
+                return@post
+            }
+            val c = choreographer ?: runCatching { Choreographer.getInstance() }
+                .getOrNull()?.also { choreographer = it }
+            if (c != null) {
+                c.postFrameCallback(frameCallback)
+            } else {
+                // 没有 vsync 源时退回定时器（保证功能不至于完全不动）
+                h.postDelayed({ frameCallback.doFrame(0L) }, FRAME_MS)
+            }
+        }
     }
 
     private fun hasVisibleMount(): Boolean {
@@ -761,6 +799,7 @@ internal object LiquidRenderer {
             return
         }
         ensureMaskTexture(appContext)
+        if (needBaseReload) reloadBase()
 
         stepSim()
 
@@ -877,6 +916,41 @@ internal object LiquidRenderer {
             maskRaw = rawMask
             LiquidMask.decode(rawMask)?.let { maskCfg = it }
         }
+        // 系统壁纸换了（用户去「壁纸与个性化」换图）：重载底图，不然一直是旧照片
+        if (runKey.isEmpty()) {
+            val ctx = appContext
+            if (ctx != null) {
+                val st = wallpaperStamp(ctx)
+                if (st != baseStamp) {
+                    baseStamp = st
+                    needBaseReload = true
+                }
+            }
+        }
+    }
+
+    /** 系统壁纸候选文件的 mtime 指纹（只做变化检测，不读内容）。 */
+    private fun wallpaperStamp(ctx: Context): Long {
+        var stamp = 0L
+        val uid = com.frederic22.hyperextreme.data.WallpaperSource.currentUserId()
+        for (path in com.frederic22.hyperextreme.data.WallpaperSource.displayPaths(uid)) {
+            val f = java.io.File(path)
+            if (f.isFile && f.length() > 50_000L) {
+                if (f.lastModified() > stamp) stamp = f.lastModified()
+            }
+        }
+        return stamp
+    }
+
+    /** GL 线程内重载底图（调用前必须已 makeCurrent）。 */
+    private fun reloadBase() {
+        needBaseReload = false
+        val ctx = appContext ?: return
+        val bmp = runCatching { loadBase(ctx, "") }.getOrNull() ?: return
+        if (baseTex != 0) GLES20.glDeleteTextures(1, intArrayOf(baseTex), 0)
+        uploadBase(bmp)
+        bmp.recycle()
+        HookRuntime.log("LIQUID 系统壁纸已变化，底图已重载")
     }
 
     /** 模拟 pass：水波走高度场 FBO；果冻走 CPU 弹簧网格 + 位移纹理上传。 */
@@ -904,7 +978,7 @@ internal object LiquidRenderer {
         GLES20.glUniform1f(sC2, params.c2)
         GLES20.glUniform1f(sDamp, params.damp * settleFactor())
         // 平滑度 → 粘度：0.10（几乎不抹）~ 0.55（只剩大波浪）
-        GLES20.glUniform1f(sVisc, 0.10f + tune.smooth * 0.45f)
+        GLES20.glUniform1f(sVisc, 0.10f + tune.smooth * 0.55f)
         GLES20.glUniform1f(sSettle, settleGain())
         GLES20.glUniform1f(sMaskOn, if (maskOn()) 1f else 0f)
         GLES20.glUniform2f(sTilt, tiltX, tiltY)
@@ -913,7 +987,7 @@ internal object LiquidRenderer {
 
         val a = touches.poll()
         val b = if (a != null) touches.poll() else null
-        val sigma = tune.sigma
+        val sigma = tune.sigma * (1f + tune.smooth * 0.8f)
         GLES20.glUniform4f(sSplat0, a?.get(0) ?: 0f, a?.get(1) ?: 0f, a?.get(2) ?: 0f, sigma)
         GLES20.glUniform4f(sSplat1, b?.get(0) ?: 0f, b?.get(1) ?: 0f, b?.get(2) ?: 0f, sigma)
 
@@ -1057,7 +1131,6 @@ internal object LiquidRenderer {
             private var gz = 9.8f
             private var lastAt = 0L
             private var lastShakeAt = 0L
-            private var primed = false
 
             override fun onSensorChanged(event: android.hardware.SensorEvent) {
                 val now = SystemClock.elapsedRealtime()
@@ -1067,15 +1140,18 @@ internal object LiquidRenderer {
                 gx += (event.values[0] - gx) * a
                 gy += (event.values[1] - gy) * a
                 gz += (event.values[2] - gz) * a
-                if (!primed) {
-                    primed = true
-                    // 第一帧就按当前姿态对齐，避免开局整幅图「掉」一下
-                    tiltX = (-gx / 4.9f).coerceIn(-1f, 1f)
-                    tiltY = (gy / 4.9f).coerceIn(-1f, 1f)
+                // 基准 = 亮屏/进锁屏那一刻的姿态：不管手机怎么拿着，水面先保持水平；
+                // 之后只对「相对基准的变化」做倾斜响应。
+                if (needTiltBaseline || baseGx.isNaN() || baseGy.isNaN()) {
+                    baseGx = gx
+                    baseGy = gy
+                    needTiltBaseline = false
+                    tiltX = 0f
+                    tiltY = 0f
                     return
                 }
-                val nx = (-gx / 4.9f).coerceIn(-1f, 1f)
-                val ny = (gy / 4.9f).coerceIn(-1f, 1f)
+                val nx = (-(gx - baseGx) / 4.9f).coerceIn(-1f, 1f)
+                val ny = ((gy - baseGy) / 4.9f).coerceIn(-1f, 1f)
                 val moved = abs(nx - tiltX) > 0.02f || abs(ny - tiltY) > 0.02f
                 tiltX = nx
                 tiltY = ny
@@ -1102,8 +1178,58 @@ internal object LiquidRenderer {
             sm.registerListener(l, sensor, android.hardware.SensorManager.SENSOR_DELAY_GAME)
             sensorManager = sm
             accelListener = l
+            watchScreen(ctx)
             HookRuntime.log("LIQUID 传感器已注册")
         }.onFailure { HookRuntime.log("LIQUID 传感器注册失败：${it.javaClass.simpleName}") }
+    }
+
+    /**
+     * 亮/灭屏监听。
+     *
+     * * **灭屏**：注销传感器（省电，系统本来也会停掉非 wakeup 传感器）；
+     * * **亮屏**：重新注册，并把「亮屏那一刻」的读数设为重力基准 —— 水面从水平开始，
+     *   而不是带着拿手机的倾角（用户 2026-11-10 的要求）。
+     */
+    private fun watchScreen(ctx: Context) {
+        if (screenReceiver != null) return
+        val filter = IntentFilter().apply {
+            addAction(Intent.ACTION_SCREEN_ON)
+            addAction(Intent.ACTION_SCREEN_OFF)
+        }
+        val r = object : BroadcastReceiver() {
+            override fun onReceive(c: Context?, i: Intent?) {
+                when (i?.action) {
+                    Intent.ACTION_SCREEN_ON -> handler?.post {
+                        needTiltBaseline = true
+                        baseGx = Float.NaN
+                        baseGy = Float.NaN
+                        restartSensor(c ?: ctx)
+                        requestFrames(1500)
+                    }
+                    Intent.ACTION_SCREEN_OFF -> handler?.post { stopSensor() }
+                }
+            }
+        }
+        runCatching {
+            if (android.os.Build.VERSION.SDK_INT >= 33) {
+                ctx.registerReceiver(r, filter, Context.RECEIVER_NOT_EXPORTED)
+            } else {
+                @Suppress("UnspecifiedRegisterReceiverFlag")
+                ctx.registerReceiver(r, filter)
+            }
+            screenReceiver = r
+        }.onFailure { HookRuntime.log("LIQUID 亮灭屏监听注册失败：${it.javaClass.simpleName}") }
+    }
+
+    private fun restartSensor(ctx: Context) {
+        stopSensor()
+        startSensor(ctx)
+    }
+
+    private fun stopScreenWatch(ctx: Context?) {
+        val r = screenReceiver ?: return
+        if (ctx != null) runCatching { ctx.unregisterReceiver(r) }
+        screenReceiver = null
     }
 
     private fun splashRandom(amp: Float) {
@@ -1134,6 +1260,9 @@ internal object LiquidRenderer {
         val l = KeyguardManager.KeyguardLockedStateListener { locked ->
             // 解锁瞬间立刻停帧：下一次 swap 之前就不会再进 drawFrame（缩小阻塞窗口）
             if (locked) {
+                needTiltBaseline = true
+                baseGx = Float.NaN
+                baseGy = Float.NaN
                 requestFrames(1800)
             } else {
                 activeUntil = 0L

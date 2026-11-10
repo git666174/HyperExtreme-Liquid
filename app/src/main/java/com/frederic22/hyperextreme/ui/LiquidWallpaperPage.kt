@@ -36,6 +36,11 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import com.frederic22.hyperextreme.data.LiquidFlag
 import com.frederic22.hyperextreme.data.LiquidMask
 import com.frederic22.hyperextreme.data.LiquidStore
@@ -107,7 +112,13 @@ internal fun LiquidWallpaperDetail(state: MaskUiState) {
     var tune by remember { mutableStateOf(prefs.liquidTune(prefs.liquidMode)) }
     var maskCfg by remember { mutableStateOf(prefs.liquidMask) }
     var quality by remember { mutableIntStateOf(prefs.liquidQuality) }
+    var rendering by remember { mutableStateOf(false) }
     var showEditor by remember { mutableStateOf(false) }
+    // 预览底图：自选素材优先，否则系统当前壁纸
+    val previewBitmap = remember(key) {
+        if (key.isEmpty()) LiquidStore.systemPreview(ctx) else LiquidStore.preview(ctx, key, 720)
+    }
+    val previewRef = remember { java.util.concurrent.atomic.AtomicReference<LiquidPreviewView?>(null) }
 
     /** 滑块拖动时只递增它；[LaunchedEffect] 负责防抖后再推属性。 */
     var pushTick by remember { mutableIntStateOf(0) }
@@ -123,6 +134,14 @@ internal fun LiquidWallpaperDetail(state: MaskUiState) {
             mask = maskCfg,
             quality = quality,
         )
+    }
+
+    /** 正在生效的另一条壁纸链（属性是全局真值，不依赖 prefs 新旧）。 */
+    fun otherChainRunning(): String? {
+        if (sysProp("debug.hyperextreme.spatial_active").trim() == "1") return "空间壁纸"
+        if (sysProp("debug.hyperextreme.raster_active").trim() == "1") return "光栅壁纸"
+        if (sysProp("debug.hyperextreme.parallax_cover").trim() == "1") return "视差壁纸"
+        return null
     }
 
     fun apply(nextActive: Boolean, nextMode: Int, nextScope: Int) {
@@ -171,6 +190,33 @@ internal fun LiquidWallpaperDetail(state: MaskUiState) {
 
     LaunchedEffect(Unit) { push() }
 
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_RESUME -> previewRef.get()?.onResume()
+                Lifecycle.Event.ON_PAUSE -> previewRef.get()?.onPause()
+                else -> Unit
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    // 进页面丢一个小涟漪，提示「可以拖动」
+    LaunchedEffect(Unit) {
+        delay(600)
+        previewRef.get()?.splash(0.5f, 0.45f)
+    }
+
+    // 渲染器运行状态（诊断）：排查「开了但没效果」时先看这一行
+    LaunchedEffect(Unit) {
+        while (true) {
+            rendering = sysProp("debug.hyperextreme.liquid_rendering").trim() == "1"
+            delay(1500)
+        }
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -183,9 +229,7 @@ internal fun LiquidWallpaperDetail(state: MaskUiState) {
         SmallTitle(text = "素材")
         Card(insideMargin = PaddingValues(16.dp)) {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                val preview = remember(key) {
-                    if (key.isEmpty()) null else LiquidStore.preview(ctx, key)
-                }
+                val preview = if (key.isEmpty()) null else previewBitmap
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -260,6 +304,36 @@ internal fun LiquidWallpaperDetail(state: MaskUiState) {
             }
         }
 
+        // ── 实时预览 ──
+        SmallTitle(text = "实时预览")
+        Card(insideMargin = PaddingValues(0.dp)) {
+            Column {
+                AndroidView(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(240.dp)
+                        .clip(RoundedCornerShape(12.dp)),
+                    factory = { c ->
+                        LiquidPreviewView(c).also { v ->
+                            previewRef.set(v)
+                            v.setTune(tune)
+                            v.setBitmap(previewBitmap)
+                        }
+                    },
+                    update = { v ->
+                        v.setTune(tune)
+                        v.setBitmap(previewBitmap)
+                    },
+                )
+                Text(
+                    text = "按住拖动看效果；参数改动实时生效。",
+                    style = MiuixTheme.textStyles.footnote2,
+                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                    modifier = Modifier.padding(16.dp),
+                )
+            }
+        }
+
         // ── 二、总开关 ──
         Card(insideMargin = PaddingValues(16.dp)) {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -281,12 +355,16 @@ internal fun LiquidWallpaperDetail(state: MaskUiState) {
                         haptic()
                         if (state.fullyActivated) {
                             val next = !active
-                            if (next && prefs.spatialActive) {
-                                Toast.makeText(
-                                    ctx,
-                                    "空间壁纸正在生效：两者会抢同一层壁纸，建议先关闭空间壁纸",
-                                    Toast.LENGTH_LONG,
-                                ).show()
+                            if (next) {
+                                val blocker = otherChainRunning()
+                                if (blocker != null) {
+                                    Toast.makeText(
+                                        ctx,
+                                        "$blocker 正在生效：两者会抢同一层壁纸，先关掉它再开液态壁纸",
+                                        Toast.LENGTH_LONG,
+                                    ).show()
+                                    return@Button
+                                }
                             }
                             apply(nextActive = next, nextMode = mode, nextScope = scopeSel)
                             Toast.makeText(
@@ -315,6 +393,35 @@ internal fun LiquidWallpaperDetail(state: MaskUiState) {
                         style = MiuixTheme.textStyles.button,
                         textAlign = TextAlign.Center,
                         modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+            }
+        }
+
+        // 运行状态（诊断）
+        Card(insideMargin = PaddingValues(12.dp)) {
+            Column {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Text(
+                        text = "运行状态",
+                        style = MiuixTheme.textStyles.body2,
+                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                    )
+                    Text(
+                        text = when {
+                            !active -> "未开启"
+                            rendering -> "渲染中 · 锁屏可见"
+                            else -> "已开启 · 等你锁屏"
+                        },
+                        style = MiuixTheme.textStyles.body2,
+                        color = if (rendering) {
+                            MiuixTheme.colorScheme.primary
+                        } else {
+                            MiuixTheme.colorScheme.onSurfaceVariantSummary
+                        },
                     )
                 }
             }
@@ -888,3 +995,10 @@ private fun featherMask(bmp: Bitmap, radius: Int) {
     }
     bmp.setPixels(out, 0, w, 0, 0, w, h)
 }
+
+/** 读系统属性：运行状态诊断和互斥检查用（不依赖 hook 进程的运行时）。 */
+private fun sysProp(name: String): String = runCatching {
+    Class.forName("android.os.SystemProperties")
+        .getMethod("get", String::class.java)
+        .invoke(null, name) as? String
+}.getOrNull().orEmpty()
