@@ -1,3 +1,15 @@
+> ### 致谢 / Credits
+>
+> 本项目是 **[HyperExtreme](https://github.com/22Frederic/HyperExtreme)** 的修改版（Fork）。
+>
+> 原作者：**[22Frederic](https://github.com/22Frederic)** · https://github.com/22Frederic/HyperExtreme
+>
+> 感谢原作者的开源与持续维护。本分支新增/修改的内容由本仓库维护者负责，与原作者无关；
+> 使用本分支遇到问题时请反馈到本仓库，不要去打扰原作者。
+>
+> 上游与本分支均采用 **AGPL-3.0** 许可，本分支的修改同样按 AGPL-3.0 公开。
+
+---
 <p align="center">
   <img src="app/src/main/res/drawable-nodpi/logo.png" alt="LOGO" width="128">
 </p>
